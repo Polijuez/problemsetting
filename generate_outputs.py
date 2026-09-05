@@ -1,0 +1,141 @@
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+hashes = {
+    "files": {},
+    "deps": {},
+}
+
+class Target:
+    def __init__(self, path, build, deps=None):
+        self.path = path
+        self._build = build
+        self.deps = deps or []
+        self.result = None
+
+    def add_dep(self, dep):
+        self.deps.append(dep)
+
+    # INV: is only called after all deps are built and their hashes are updated
+    def build(self):
+
+        if not self.is_up_to_date():
+            self._build()
+            hashes["files"][str(self.path)] = file_checksum(self.path)
+            hashes["deps"][str(self.path)] = {str(dep.path): hashes["files"][str(dep.path)] for dep in self.deps}
+
+    def is_up_to_date(self):
+        if str(self.path) not in hashes["files"] or str(self.path) not in hashes["deps"]:
+            return False
+
+        for dep in self.deps:
+            if hashes["deps"][str(self.path)].get(str(dep.path), "") != hashes["files"][str(dep.path)]:
+                return False
+
+        if not self.path.exists():
+            return False
+
+        if len(self.deps) == 0:
+            return False
+
+        return True
+
+def do_nothing():
+    return
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("problem", type=str)
+    args = parser.parse_args()
+
+    problem_dir = Path(__file__).parent / args.problem
+    
+    metadata_dir = problem_dir / "__meta__"
+    metadata_dir.mkdir(exist_ok=True)
+
+    global hashes
+
+    hash_file = metadata_dir / "hashes.json"
+    if hash_file.exists():
+        with hash_file.open("r") as f:
+            hashes = json.load(f)
+
+    cases_dir = problem_dir / "cases"
+    cases_dir.mkdir(exist_ok=True)
+
+    outputs = []
+
+    solution_src_path = problem_dir / "solution.cpp"
+    evaluator_src_path = problem_dir / "evaluator.cpp"
+    signature_hdr_path = problem_dir / "signature.hpp"
+
+    exe_path = problem_dir / "solution.exe"
+
+    # TODO: support non-cpp solutions
+    signature_hdr = Target(signature_hdr_path, do_nothing)
+    evaluator_src = Target(evaluator_src_path, do_nothing)
+    solution_src = Target(solution_src_path, do_nothing)
+
+    exe = Target(exe_path, compile_solution([evaluator_src_path, solution_src_path], exe_path), [signature_hdr, solution_src, evaluator_src])
+
+    for case in cases_dir.glob("*.in"):
+        case_in = Target(case, do_nothing)
+        case_out = Target(case.with_suffix(".out"), run_solution(exe.path, case), [exe, case_in])
+        outputs.append(case_out)
+
+    order = []
+    visited = set()
+    def visit(target):
+        visited.add(target)
+        for dep in target.deps:
+            if dep not in visited:
+                visit(dep)
+        order.append(target)
+    for output in outputs:
+        visit(output)
+
+    with ThreadPoolExecutor() as executor:
+
+        for target in order:
+            
+            # wait for deps to finish
+            for dep in target.deps:
+                dep.result.result()
+
+            target.result = executor.submit(lambda t=target: t.build())
+
+        # wait for all targets to finish
+        for target in order:
+            target.result.result()
+
+    with hash_file.open("w") as f:
+        json.dump(hashes, f)
+
+def compile_solution(srcs, exe):
+    def task():
+        command = ["g++", *map(str, srcs), "-o", str(exe)]
+        print(' '.join(command), file=sys.stderr)
+        subprocess.run(command)
+    return task
+
+def run_solution(exe, case):
+    def task():
+        output = case.with_suffix(".out")
+        print(str(exe), str(case), str(output), file=sys.stderr)
+        subprocess.run([str(exe), str(case), str(output)])
+    return task
+
+def file_checksum(path, algo='md5', chunk_size=8192):
+    h = hashlib.new(algo)
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(chunk_size), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+if __name__ == '__main__':
+    main()
