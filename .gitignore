@@ -1,0 +1,4 @@
+*.in
+*.out
+__pycache__
+__meta__
