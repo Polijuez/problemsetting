@@ -1,6 +1,7 @@
 import sys
 import argparse
 import yaml
+import re
 from pathlib import Path
 
 def main():
@@ -21,7 +22,14 @@ def main():
         copy(model, path, file)
         
     if args.problemtype == "signature":
-        copy(model, path, "solution_signature.cpp")
+        cont = []
+        with (model / "solution.cpp").open("r") as f:
+            for line in f.readlines():
+                if re.search(r'main\(.*\)', line):
+                    break
+                cont.append(line)
+        with (path / "solution.cpp").open("w") as f:
+            f.writelines(cont)
     else:
         copy(model, path, f"solution{args.solutionlang}")
 

@@ -16,5 +16,5 @@ int main(int argc, char** argv) {
 	for (int i = 0; i < N; i++) {
 		std::cin >> a[i];
 	}
-	std::cout << std::fixed << std::setprecision(1) << solve(N, a) << "\n";
+	std::cout << std::fixed << std::setprecision(1) << median(N, a) << "\n";
 }
