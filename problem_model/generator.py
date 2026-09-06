@@ -15,10 +15,10 @@ class TestCase:
         f.write(" ".join(map(str, self.xs)) + "\n")
 
 def gen_st1(cases):
-    return [TestCase(5,[1,2,3,4,5]),
-            TestCase(5,[1,1,1,1,1]),
-            TestCase(5,[10**9,10**9,10**9,10**9,10**9]),
-            TestCase(6,[1,2,3,4,5,6])]
+    cases.append(TestCase(5,[1,2,3,4,5]))
+    cases.append(TestCase(5,[1,1,1,1,1]))
+    cases.append(TestCase(5,[10**9,10**9,10**9,10**9,10**9]))
+    cases.append(TestCase(6,[1,2,3,4,5,6]))
 
 class Generator:
     def __init__(self, seed=3141592):

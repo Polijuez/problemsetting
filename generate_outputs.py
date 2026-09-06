@@ -188,7 +188,8 @@ class PythonRunner:
 
     def run_solution(self, exe, case):
         def task():
-            command = ['uv','run','python3',str(exe)]
+            output = case.with_suffix(".out")
+            command = ['uv','run','python3',str(exe),str(case), str(output)]
             print(' '.join(command), file=sys.stderr)
             subprocess.run(command)
 
