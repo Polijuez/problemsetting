@@ -1,39 +1,51 @@
-import os
 import sys
+import argparse
+import yaml
 from pathlib import Path
 
-def create_folder(path, modelpath):
-    if os.path.exists(path):
-        raise Exception("The folder for this problem has already been created")
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("problem", type=str)
+    parser.add_argument("--problemtype", type=str, default="standard")
+    parser.add_argument("--solutionlang", type=str, default=".cpp")
+    args = parser.parse_args()
 
-    os.mkdir(path)
-    copy(path, modelpath, "generator.py")
-    copy(path, modelpath, "signature.hpp")
-    copy(path, modelpath, "evaluator.cpp")
-    copy(path, modelpath, "solution.cpp")
-    copy(path, modelpath, "checker.py")
-    os.mkdir(path / 'cases')
+    path = Path(f'./{args.problem}')
+    model = Path(f'./problem_model')
 
-def copy(path, modelpath, filename):
-    model = ""
-    with open(modelpath.joinpath(filename), "r") as f:
-        model = f.read()
-    with open(path.joinpath(filename), "w") as f:
-        f.write(model)
+    if path.exists():
+        print("The folder for this problem has already been created", file=sys.stderr)
 
-usage = """
-usage: init_problem <problem_name>
+    path.mkdir()
+    for file in get_selection(args):
+        copy(model, path, file)
+        
+    if args.problemtype == "signature":
+        copy(model, path, "solution_signature.cpp")
+    else:
+        copy(model, path, f"solution{args.solutionlang}")
 
-Creates a new problem with a default folder structure and common utilities.
-The folder is named after the <problem_name>.
-"""
+        
+    meta = {"problem": args.problem,
+            "problemtype": args.problemtype,
+            "solutionlang": args.solutionlang}
 
-if len(sys.argv) > 1:
-    try:
-        p = Path(f'./{sys.argv[1]}')
-        model = Path(f'./problem_model')
-        create_folder(p, model)
-    except Exception as error:
-        print(error)
-else:
-    print(usage)
+    with (path / "meta.yml").open("w") as f:
+        yaml.safe_dump(meta,f)
+
+def copy(model, path, file):
+    with (model / file).open("r") as f:
+        cont = f.read()
+    with (path / file).open("w") as f:
+        f.write(cont)
+
+def get_selection(args):
+    match (args.problemtype):
+        case ("standard"):
+            return ["checker.py","generator.py"]
+        case ("signature"):
+            return ["checker.py","generator.py","signature.hpp","evaluator.cpp"]
+    return None
+
+if __name__ == "__main__":
+    main()

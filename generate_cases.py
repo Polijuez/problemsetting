@@ -20,9 +20,15 @@ def generate_files(generator, problem_dir):
     case_data = generator.get_cases()
     subtasks = generator.get_subtasks()
 
-    with (problem_dir / 'meta.yml').open() as f:
-        metadata = yaml.safe_load(f.read())
+    meta_file = problem_dir / 'meta.yml'
+    if meta_file.exists():
+        with meta_file.open() as f:
+            metadata = yaml.safe_load(f.read())
+    else:
+        metadata=dict()
 
+    metadata.setdefault('problemtype','standard')
+    metadata.setdefault('solutionlang','.cpp')
 
     cases = []
 
