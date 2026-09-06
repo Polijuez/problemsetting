@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import yaml
 
 hashes = {
     "files": {},
@@ -54,7 +55,7 @@ def main():
     args = parser.parse_args()
 
     problem_dir = Path(__file__).parent / args.problem
-    
+
     metadata_dir = problem_dir / "__meta__"
     metadata_dir.mkdir(exist_ok=True)
 
@@ -70,22 +71,45 @@ def main():
 
     outputs = []
 
-    solution_src_path = problem_dir / "solution.cpp"
-    evaluator_src_path = problem_dir / "evaluator.cpp"
-    signature_hdr_path = problem_dir / "signature.hpp"
+    with (problem_dir / 'meta.yml').open() as f:
+        metadata = yaml.safe_load(f.read())
 
-    exe_path = problem_dir / "solution.exe"
-
-    # TODO: support non-cpp solutions
-    signature_hdr = Target(signature_hdr_path, do_nothing)
-    evaluator_src = Target(evaluator_src_path, do_nothing)
+    runner = get_runner(metadata)
+    solution_src_path = problem_dir / f"solution{metadata['solutionlang']}"
     solution_src = Target(solution_src_path, do_nothing)
 
-    exe = Target(exe_path, compile_solution([evaluator_src_path, solution_src_path], exe_path), [signature_hdr, solution_src, evaluator_src])
+    if metadata['problemtype'] == 'signature' and metadata['solutionlang'] == '.cpp':
+        evaluator_src_path = problem_dir / "evaluator.cpp"
+        signature_hdr_path = problem_dir / "signature.hpp"
+
+        signature_hdr = Target(signature_hdr_path, do_nothing)
+        evaluator_src = Target(evaluator_src_path, do_nothing)
+
+        exe_path = problem_dir / "solution.exe"
+
+        exe = Target(exe_path, runner.compile_solution([evaluator_src_path, solution_src_path], exe_path), [signature_hdr, solution_src, evaluator_src])
+
+    elif metadata['solutionlang'] == '.cpp':
+        exe_path = problem_dir / "solution.exe"
+
+        exe = Target(exe_path, runner.compile_solution([solution_src_path],exe_path), [solution_src])
+
+    elif metadata['solutionlang'] == '.py':
+        exe_path = solution_src_path
+
+        exe = Target(exe_path, runner.compile_solution([solution_src_path],exe_path), [solution_src])
+    elif metadata['solutionlang'] == '.hs':
+        exe_path = problem_dir / "solution.exe"
+
+        exe = Target(exe_path, runner.compile_solution([solution_src_path],exe_path), [solution_src])
+
+
+    else:
+        raise Exception
 
     for case in cases_dir.glob("*.in"):
         case_in = Target(case, do_nothing)
-        case_out = Target(case.with_suffix(".out"), run_solution(exe.path, case), [exe, case_in])
+        case_out = Target(case.with_suffix(".out"), runner.run_solution(exe.path, case), [exe, case_in])
         outputs.append(case_out)
 
     order = []
@@ -102,7 +126,7 @@ def main():
     with ThreadPoolExecutor() as executor:
 
         for target in order:
-            
+
             # wait for deps to finish
             for dep in target.deps:
                 dep.result.result()
@@ -116,19 +140,6 @@ def main():
     with hash_file.open("w") as f:
         json.dump(hashes, f)
 
-def compile_solution(srcs, exe):
-    def task():
-        command = ["g++", *map(str, srcs), "-o", str(exe)]
-        print(' '.join(command), file=sys.stderr)
-        subprocess.run(command)
-    return task
-
-def run_solution(exe, case):
-    def task():
-        output = case.with_suffix(".out")
-        print(str(exe), str(case), str(output), file=sys.stderr)
-        subprocess.run([str(exe), str(case), str(output)])
-    return task
 
 def file_checksum(path, algo='md5', chunk_size=8192):
     h = hashlib.new(algo)
@@ -136,6 +147,72 @@ def file_checksum(path, algo='md5', chunk_size=8192):
         for chunk in iter(lambda: f.read(chunk_size), b''):
             h.update(chunk)
     return h.hexdigest()
+
+
+class CppRunner:
+    def compile_solution(self, srcs, exe):
+        def task():
+            command = ["g++", *map(str, srcs), "-o", str(exe)]
+            print(' '.join(command), file=sys.stderr)
+            subprocess.run(command)
+        return task
+
+
+    def run_solution(self, exe, case):
+        def task():
+            output = case.with_suffix(".out")
+            print(str(exe), str(case), str(output), file=sys.stderr)
+            subprocess.run([str(exe), str(case), str(output)])
+        return task
+
+
+class CppSignatureRunner(CppRunner):
+    def compile_solution(self, srcs, exe):
+        def task():
+            command = ["g++", *map(str, [*srcs, problem_dir / 'evaluator.cpp']), "-o", str(exe)]
+            print(' '.join(command), file=sys.stderr)
+            subprocess.run(command)
+
+        return task
+
+class PythonRunner:
+    def compile_solution(self):
+        pass
+
+    def run_solution(self, exe, case):
+        def task():
+            print('uv run python3 ', exe)
+            subprocess.run(['uv', 'run', 'python3', exe])
+
+        return task
+
+class HaskellRunner:
+    def compile_solution(self, srcs, exe):
+        def task():
+            command = ["ghc", *map(str, srcs), "-o", str(exe)]
+            print(' '.join(command), file=sys.stderr)
+            subprocess.run(command)
+        return task
+
+    def run_solution(self, exe, case):
+        def task():
+            output = case.with_suffix(".out")
+            print(str(exe), str(case), str(output), file=sys.stderr)
+            subprocess.run([str(exe), str(case), str(output)])
+        return task
+
+def get_runner(metadata):
+    match (metadata['problemtype'], metadata['solutionlang']):
+        case ('standard', '.cpp'):
+            return CppRunner()
+        case ('signature', 'cpp'):
+            return CppSignatureRunner()
+        case (_, '.hs'):
+            return HaskellRunner()
+        case (_, '.py'):
+            return PythonRunner()
+    return None
+
 
 if __name__ == '__main__':
     main()

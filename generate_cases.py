@@ -1,12 +1,13 @@
 import argparse
 import importlib
 from pathlib import Path
+import yaml
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("problem", type=str)
     args = parser.parse_args()
-    
+
     problem_dir = Path(__file__).parent / args.problem
     assert problem_dir.is_dir()
 
@@ -14,10 +15,14 @@ def main():
     generate_files(module.Generator(), problem_dir)
 
 def generate_files(generator, problem_dir):
-    
+
     problem_name = problem_dir.name
     case_data = generator.get_cases()
     subtasks = generator.get_subtasks()
+
+    with (problem_dir / 'meta.yml').open() as f:
+        metadata = yaml.safe_load(f.read())
+
 
     cases = []
 
@@ -27,11 +32,12 @@ def generate_files(generator, problem_dir):
         output_name = f"{i}.out"
         case.write_file((problem_dir / "cases" / input_name).open("w"))
         cases.append((case, input_name, output_name))
-    
+
     with (problem_dir / "init.yml").open("w") as f:
         f.write(f"archive: {problem_name}.zip\n")
         f.write("checker: checker.py\n")
-        f.write("signature_grader: {entry: evaluator.cpp, header: signature.hpp}\n")
+        if metadata['problemtype'] == 'signature':
+            f.write("signature_grader: {entry: evaluator.cpp, header: signature.hpp}\n")
         f.write("test_cases:\n")
         for points, checker in subtasks:
             f.write(f"- points: {points}\n")
