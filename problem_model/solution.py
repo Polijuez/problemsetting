@@ -11,21 +11,10 @@ def median(xs):
 
 
 def main():
-    if len(sys.argv) > 1:
-        fin = open(sys.argv[1], "r")
-        fout = open(sys.argv[2], "w")
-    else:
-        fin = sys.stdin
-        fout = sys.stdout
-
-    data = list(map(int, fin.read().split()))
+    data = list(map(int, sys.stdin.read().split()))
     n = data[0]
     xs = data[1 : 1 + n]
-    fout.write(f"{median(xs):.1f}\n")
-
-    if len(sys.argv) > 1:
-        fin.close()
-        fout.close()
+    sys.stdout.write(f"{median(xs):.1f}\n")
 
 
 if __name__ == "__main__":

@@ -2,3 +2,9 @@
 *.out
 __pycache__
 __meta__
+# generated problem build artifacts
+*.zip
+solution.exe
+solution.o
+solution.hi
+solution

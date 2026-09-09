@@ -1,15 +1,8 @@
 import Data.List (sort)
-import System.Environment (getArgs)
 import Text.Printf (printf)
 
 main :: IO ()
-main = do
-  args <- getArgs
-  case args of
-    (infile : outfile : _) -> do
-      contents <- readFile infile
-      writeFile outfile (solve contents)
-    _ -> interact solve
+main = interact solve
 
 solve :: String -> String
 solve contents =

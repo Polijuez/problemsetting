@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 
+# DEPRECATED: This script is a local .cpp-only simulator that does not use
+# the real DMOJ judge. It will be removed once judge_solutions.py (dmoj-cli
+# based) is confirmed to work well across all problem types.
+# Use judge_solutions.py for authoritative grading.
+
 import argparse
 import importlib.util
 import json

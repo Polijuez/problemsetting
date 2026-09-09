@@ -167,8 +167,9 @@ class CppRunner:
     def run_solution(self, exe, case):
         def task():
             output = case.with_suffix(".out")
-            print(str(exe), str(case), str(output), file=sys.stderr)
-            subprocess.run([str(exe), str(case), str(output)])
+            print(str(exe), str(case), file=sys.stderr)
+            with open(case, "rb") as fin, open(output, "wb") as fout:
+                subprocess.run([str(exe)], stdin=fin, stdout=fout)
         return task
 
 
@@ -189,9 +190,10 @@ class PythonRunner:
     def run_solution(self, exe, case):
         def task():
             output = case.with_suffix(".out")
-            command = ['uv','run','python3',str(exe),str(case), str(output)]
+            command = ['uv','run','python3',str(exe)]
             print(' '.join(command), file=sys.stderr)
-            subprocess.run(command)
+            with open(case, "rb") as fin, open(output, "wb") as fout:
+                subprocess.run(command, stdin=fin, stdout=fout)
 
         return task
 
@@ -206,8 +208,9 @@ class HaskellRunner:
     def run_solution(self, exe, case):
         def task():
             output = case.with_suffix(".out")
-            print(str(exe), str(case), str(output), file=sys.stderr)
-            subprocess.run([str(exe), str(case), str(output)])
+            print(str(exe), str(case), file=sys.stderr)
+            with open(case, "rb") as fin, open(output, "wb") as fout:
+                subprocess.run([str(exe)], stdin=fin, stdout=fout)
         return task
 
 def get_runner(metadata):
