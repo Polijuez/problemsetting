@@ -25,6 +25,7 @@ from . import cases  # noqa: F401  (registers `cases`, `archive`, `build`)
 from . import judges  # noqa: F401  (registers `judges`)
 from . import outputs  # noqa: F401  (registers `outputs`)
 from . import scaffold  # noqa: F401  (registers `new`)
+from . import verify  # noqa: F401  (registers `verify`)
 
 
 def build_parser() -> argparse.ArgumentParser:

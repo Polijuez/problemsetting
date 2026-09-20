@@ -31,6 +31,7 @@ command at a time and streams the output back.  Grading is therefore
 from __future__ import annotations
 
 import dataclasses
+import itertools
 import json
 import os
 import re
@@ -570,7 +571,14 @@ def run_command(
     output = result.stdout
     if result.stderr.strip():
         output += result.stderr
+
     return result.returncode, output
+
+#: The sequence that makes each of one process's ``submit`` command ids unique.
+#: The launcher keys a command's spool file by that id, so two submissions
+#: sharing one id -- which is what a ``verify`` run over several entries does --
+#: would have the second read the first's transcript and report its verdict.
+_SUBMISSION_SEQUENCE = itertools.count(1)
 
 
 def submit(
@@ -605,7 +613,7 @@ def submit(
     status, raw = run_command(
         name,
         command,
-        command_id=command_id or f"submit-{problem}-{os.getpid()}",
+        command_id=command_id or f"submit-{problem}-{os.getpid()}-{next(_SUBMISSION_SEQUENCE)}",
         timeout=timeout,
     )
     return parse_grading(raw, status)
@@ -634,6 +642,17 @@ def container_path(source: Path, problems_root: Path | None = None) -> str:
 #: earlier case in the same batch failed, and it fails the batch too.
 _CASE_RE = re.compile(r"Test case\s+(\d+)\s+(\S+)")
 _BATCH_RE = re.compile(r"Batch #(\d+)")
+
+#: The measurement that follows a verdict, as ``dmoj/judge.py:_ipc_result``
+#: formats it: ``[0.004s (0.005s wall) | 3964kb | 14 switches ...]``.  Only the
+#: CPU time and the peak memory are captured -- the wall clock is the same
+#: measurement with the unavoidable scheduling noise added, and the toolkit
+#: reports what a limit would be calibrated against.  A skipped (``--``) case
+#: carries no bracket at all, so the measurement is optional as a group.
+_CASE_DETAIL_RE = re.compile(
+    r"Test case\s+(\d+)\s+(\S+)"
+    r"(?:\s+\[\s*([\d.]+)s\s+\([\d.]+\s*s wall\)\s*\|\s*(\d+)kb)"
+)
 _COMPILE_ERROR_MARKERS = (
     "Failed compiling submission",
     "CompileError",
@@ -654,28 +673,74 @@ _COMMAND_ERROR_MARKERS = (
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
+@dataclasses.dataclass(frozen=True)
+class CaseResult:
+    """One ``Test case`` line: its verdict and what the judge measured.
+
+    ``time`` is seconds and ``memory`` is KiB, exactly as the judge reported
+    them; they are observation only, never fed back as a limit.
+    """
+
+    number: int
+    verdict: str
+    time: float | None = None
+    memory: int | None = None
+
+
+def parse_case_line(line: str) -> CaseResult | None:
+    """The case one line reports, or None when the line is not a result.
+
+    The measurements are optional as a group: ``--`` (a case skipped after an
+    earlier failure in its batch) is reported with no bracket at all, and a
+    transcript whose timing was formatted differently must still yield its
+    verdicts rather than losing every case.
+    """
+    match = _CASE_DETAIL_RE.search(line)
+    if match:
+        return CaseResult(
+            number=int(match.group(1)),
+            verdict=match.group(2),
+            time=float(match.group(3)),
+            memory=int(match.group(4)),
+        )
+    match = _CASE_RE.search(line)
+    if match:
+        return CaseResult(number=int(match.group(1)), verdict=match.group(2))
+    return None
+
+
+def parse_cases(raw: str) -> list[CaseResult]:
+    """Every reported case, in judge order, with its verdict and measurements."""
+    results: list[CaseResult] = []
+    for line in _ANSI_RE.sub("", raw).splitlines():
+        if (case := parse_case_line(line)) is not None:
+            results.append(case)
+    return results
+
+
 def parse_verdicts(raw: str) -> dict[str, int]:
     """Count per-case verdicts, keyed by verdict code."""
     counts: dict[str, int] = {}
-    for line in _ANSI_RE.sub("", raw).splitlines():
-        match = _CASE_RE.search(line)
-        if match:
-            verdict = match.group(2)
-            counts[verdict] = counts.get(verdict, 0) + 1
+    for case in parse_cases(raw):
+        counts[case.verdict] = counts.get(case.verdict, 0) + 1
     return counts
 
 
-def parse_batches(raw: str) -> list[list[str]]:
-    """Group per-case verdicts by ``Batch #k`` section, in the order reported."""
-    batches: list[list[str]] = []
+def parse_batch_cases(raw: str) -> list[list[CaseResult]]:
+    """Group reported cases by ``Batch #k`` section, in the order reported."""
+    batches: list[list[CaseResult]] = []
     for line in _ANSI_RE.sub("", raw).splitlines():
         if _BATCH_RE.search(line):
             batches.append([])
             continue
-        match = _CASE_RE.search(line)
-        if match and batches:
-            batches[-1].append(match.group(2))
+        if batches and (case := parse_case_line(line)) is not None:
+            batches[-1].append(case)
     return batches
+
+
+def parse_batches(raw: str) -> list[list[str]]:
+    """Per-batch verdict codes, in the order reported."""
+    return [[case.verdict for case in group] for group in parse_batch_cases(raw)]
 
 
 def parse_grading(raw: str, status: int) -> Grading:

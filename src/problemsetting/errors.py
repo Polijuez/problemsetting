@@ -34,3 +34,7 @@ class JudgeError(ProblemsettingError):
 
 class OutputError(ProblemsettingError):
     """The model solution cannot be built, run, or trusted as an expected output."""
+
+
+class VerifyError(ProblemsettingError):
+    """``submissions.yml`` is malformed, or a graded run contradicts it."""

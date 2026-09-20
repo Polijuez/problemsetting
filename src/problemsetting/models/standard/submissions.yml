@@ -8,24 +8,36 @@
 # realidad no coincide con la expectativa declarada, `verify` falla.
 #
 # Campos:
-#   source   ruta al archivo de la submission, relativa a este archivo (o al
-#            directorio del problema).
-#   verdict  veredicto DMOJ esperado: AC, WA, TLE, MLE, RE, CE, ...
-#            Opcional: sin veredicto el envío se corre y se reporta de forma
-#            informativa, sin hacer fallar a `verify`.
-#   score    puntaje esperado sobre 100.  Opcional, igual que verdict.
-#   role     para qué sirve el envío dentro del toolkit:
-#              model   la solución modelo (la que genera los `.out`); se espera
-#                      puntaje completo.
-#              brute   la fuerza bruta de referencia: `verify` la usa para
-#                      comprobar que coincide con la solución modelo en los casos
-#                      chicos, y `problemsetting stress` la compara contra la
-#                      solución modelo sobre casos aleatorios.  Declarada una
-#                      sola vez, consumida por ambos.
+#   source   Ruta al archivo de la submission, relativa al directorio del
+#            problema.  Obligatorio.
+#   verdict  Veredicto DMOJ esperado: AC, WA, TLE, MLE, OLE, RTE, IR, SC o CE.
+#            Opcional.
+#   score    Puntaje esperado, como porcentaje del total del problema (0 a 100).
+#            Opcional.
+#   role     Para qué sirve el envío dentro del toolkit.  Informativo para
+#            `verify`; los tickets posteriores leen este campo en vez de volver a
+#            declarar el envío:
+#              model         la solución modelo (la que produce los `.out`).
+#              brute         la fuerza bruta de referencia, que el stress test
+#                            compara contra la solución modelo sobre casos
+#                            diminutos.
 #              checker-test  salida deliberadamente malformada, para comprobar
-#                      que el checker la rechaza en vez de romperse.
+#                            que el checker la rechaza en vez de romperse.
+#            Opcional.
+#   executor Ejecutor DMOJ con el que se corre este envío, cuando no se quiere
+#            inferir del sufijo del archivo (por ejemplo PYPY3 para un `.py`, o
+#            CPP20 para un `.cpp`).  Opcional.
 #
-# `role` es informativo: el toolkit no exige que exista ningún rol en particular.
+# Un envío sin `verdict` ni `score` es informativo: se corre y se reporta, pero no
+# puede hacer fallar a `verify`.
+#
+# Los límites salen de `meta.yml`: el lenguaje del envío se infiere de su sufijo
+# (con `executor` como override) y se usan el `tl` y el `ml` declarados para ese
+# lenguaje.  Un lenguaje sin entrada en `limits:` usa 2 s / 262144 KiB.
+#
+# Las expectativas de puntaje de este archivo salen de una corrida real, no de
+# razonarlas: DMOJ corta el resto del lote apenas un caso falla, y predecir a mano
+# qué puntaje deja eso es exactamente cómo se publican expectativas equivocadas.
 
 submissions:
   # La solución modelo es la misma que produce los `.out`, así que se declara acá
@@ -35,14 +47,20 @@ submissions:
     score: 100
     role: model
 
-  # Imprime a + b + 1: falla todos los casos, por lo tanto 0 puntos.
+  # Imprime a + b + 1: falla el primer caso y el lote se corta ahí, por lo tanto
+  # 0 puntos.
   - source: submissions/incorrecto.cpp
     verdict: WA
     score: 0
 
-  # Correcta pero de costo O(|b|).  No se le declara veredicto porque no da TLE
-  # con el `tl` de este problema (ver el comentario del archivo: ~0.24 s en el
-  # peor caso contra 1 s); su papel es ser la referencia del stress test, así que
-  # lo que importa es que coincida con la solución modelo en los casos chicos.
+  # Correcta pero de costo O(|b|): su papel es ser la referencia del stress test
+  # (`role: brute`), así que lo que importa es que coincida con la solución modelo
+  # en los casos diminutos de `gen_small`, no su tiempo.  Se declara el veredicto
+  # que dio la corrida real con el `tl` de este problema (ver el comentario del
+  # archivo sobre por qué no alcanza para TLE con este enunciado; la comprobación
+  # de "correcto pero lento da TLE" se ejerce en el modelo `batched`, donde sí hay
+  # una escalera real de complejidades).
   - source: submissions/fuerza-bruta.cpp
+    verdict: AC
+    score: 100
     role: brute

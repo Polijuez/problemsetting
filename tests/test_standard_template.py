@@ -141,3 +141,23 @@ def test_model_solution_reads_what_the_generator_writes(generator_module) -> Non
     values = buffer.getvalue().split()
     assert len(values) == 2
     assert int(values[0]) + int(values[1]) == 3
+
+
+def test_the_template_manifest_matches_the_schema_verify_reads(template: Path) -> None:
+    """The template ships the manifest users start from, so it must parse.
+
+    Read through ``verify.load_manifest`` rather than by loading the YAML here:
+    the point is that the file the template ships is accepted by the code that
+    consumes it, which is the drift this guards against.
+    """
+    from problemsetting import verify
+
+    _, resolved = meta_mod.load(template)
+    entries = verify.load_manifest(template, resolved)
+    assert [entry.source.as_posix() for entry in entries] == [
+        "solution.cpp",
+        "submissions/incorrecto.cpp",
+        "submissions/fuerza-bruta.cpp",
+    ]
+    assert [entry.role for entry in entries] == ["model", None, "brute"]
+    assert all(entry.declares_expectation for entry in entries)

@@ -77,6 +77,20 @@ FAMILY_BY_EXT: dict[str, str] = {
     ".txt": "text",
 }
 
+#: The extension that *names* each language family -- the one ``limits:`` and
+#: ``solutionlang:`` keys use.  It is the inverse of :data:`FAMILY_BY_EXT`, stated
+#: here rather than derived at each call site so that the two tables cannot
+#: disagree: a new family added to :data:`EXECUTOR_FAMILY` without an entry here
+#: is caught by the assertion below at import time, not by an unexplained
+#: ``StopIteration`` in a grading run.
+CANONICAL_EXT: dict[str, str] = {
+    family: ext for ext, family in FAMILY_BY_EXT.items()
+}
+
+assert set(CANONICAL_EXT) == set(EXECUTOR_FAMILY.values()), (
+    "every executor family needs a canonical extension in FAMILY_BY_EXT"
+)
+
 #: Defaults per language: 2 s and 256 MiB (262144 KiB), the judge's own defaults.
 DEFAULT_TL = 2.0
 DEFAULT_ML = 262144
