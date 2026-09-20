@@ -24,5 +24,9 @@ class ScaffoldError(ProblemsettingError):
     """``problemsetting new`` cannot scaffold the requested problem."""
 
 
+class CaseError(ProblemsettingError):
+    """A problem's ``generator.py`` cannot be turned into cases and ``init.yml``."""
+
+
 class JudgeError(ProblemsettingError):
     """The judge image, the container pool, or a grading run is unusable."""
