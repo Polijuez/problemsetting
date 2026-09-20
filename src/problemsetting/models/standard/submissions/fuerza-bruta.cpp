@@ -1,22 +1,26 @@
 // Fuerza bruta: suma los operandos avanzando de a uno.
 //
-// Es correcta en el rango chico y lentísima en el grande: con a = 0, b = 10^9 el
-// bucle da mil millones de vueltas, así que en los casos límite de ST2 el juez la
-// mata por tiempo (TLE) y en los chicos termina al instante.  Esa asimetría es
-// exactamente lo que la hace útil: es correcta donde importa y no se puede usar
-// como solución real.
+// Es correcta, y su costo es O(|b|): con b = 10^9 da mil millones de vueltas.
 //
-// Dos papeles en el toolkit:
+// Su papel en el toolkit es ser la **referencia del stress test**: `role: brute`
+// en submissions.yml la declara como aquello contra lo que `problemsetting
+// stress` compara la solución modelo sobre casos diminutos
+// (`Generator.gen_small`), donde el rango chico hace que el costo sea
+// despreciable.
 //
-//   * `role: brute` en submissions.yml la declara como la referencia contra la
-//     que `problemsetting stress` compara la solución modelo sobre casos
-//     diminutos (`Generator.gen_small`), donde las 2000 iteraciones del rango
-//     chico no cuestan nada.
-//   * Es el envío que demuestra que un límite de tiempo existe: `verify` la
-//     reporta con TLE en los casos grandes, y así el límite de meta.yml queda
-//     justificado en vez de ser un número elegido a ojo.  En A+B, donde la
-//     solución real es O(1), ningún límite razonable la deja pasar, así que acá
-//     se declara sin veredicto esperado (se reporta, no hace fallar a verify).
+// Sobre el tiempo: NO alcanza para demostrar el límite de meta.yml.  Medida con
+// g++ -O2 (como compila el juez, ver `dmoj/executors/c_like_executor.py`) tarda
+// ~0.24 s en el peor caso, contra un `tl` de 1 s, así que no da TLE y por eso acá
+// no se declara veredicto esperado.  Es una limitación del problema, no del
+// toolkit: A+B se resuelve en O(1), así que ningún envío correcto-pero-lento
+// natural existe para este enunciado -- fabricar uno artificialmente (un bucle
+// vacío gigante) no probaría nada sobre el límite.  La comprobación de "un envío
+// correcto pero demasiado lento da TLE" se ejerce donde sí hay una escalera de
+// complejidades real: el modelo `batched`.
+//
+// Si convertís este archivo en un envío que deba dar TLE, subí el trabajo por
+// unidad hasta que el peor caso supere el `tl` declarado, y verificá el veredicto
+// corriéndolo -- no lo deduzcas.
 
 #include <iostream>
 

@@ -56,8 +56,15 @@ def run(args: argparse.Namespace) -> int:
     raw[meta_mod.SOLUTIONLANG_KEY] = solutionlang
     authoring = meta_mod.normalize(raw, str(source / meta_mod.META_FILENAME))
 
-    if destination.exists():
+    if destination.is_dir():
         shutil.rmtree(destination)
+    elif destination.exists():
+        # `--force` replaces a problem directory; it never deletes a file the
+        # author may have meant to keep under another name.
+        raise ScaffoldError(
+            f"{destination} is not a directory -- refusing to delete it; "
+            f"move it aside first"
+        )
     shutil.copytree(source, destination, ignore=shutil.ignore_patterns(*templates.TEMPLATE_IGNORE))
 
     meta_mod.write(destination, authoring)
@@ -91,10 +98,11 @@ def pick_solutionlang(requested: str | None, model: str) -> str:
             f"unknown solution language {requested!r}; valid values: "
             f"{', '.join(sorted(meta_mod.EXECUTOR_BY_EXT))}"
         )
-    if requested not in meta_mod.allowed_extensions(meta_mod.MODELS[model]):
+    allowed = meta_mod.allowed_extensions(meta_mod.MODELS[model])
+    if requested not in allowed:
         raise ProblemsettingError(
             f"model {model!r} cannot use solutionlang {requested!r}; valid values: "
-            f"{', '.join(meta_mod.allowed_extensions(meta_mod.MODELS[model]))}"
+            f"{', '.join(allowed)}"
         )
     if requested not in shipped:
         raise ProblemsettingError(

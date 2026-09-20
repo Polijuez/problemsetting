@@ -177,11 +177,6 @@ MODELS: dict[str, dict[str, str]] = {
     },
 }
 
-#: Filenames init.yml refers to.  Standard names; a problem that renames them
-#: must edit the generated init.yml, since DMOJ's keys are configurable.
-CHECKER_FILE = "checker.py"
-SIGNATURE_ENTRY = "evaluator.cpp"
-SIGNATURE_HEADER = "signature.hpp"
 
 LIMITS_KEY = "limits"
 MODEL_KEY = "model"
@@ -205,8 +200,28 @@ DEFAULT_LIMITS: dict[str, Limits] = {
 }
 
 
-def allowed_extensions(axes: Mapping[str, str]) -> tuple[str, ...]:
-    """Model-solution extensions a model accepts, derived from its axes.
+#: Why a model's extension set is narrower than the full table, keyed by the
+#: structural fact that narrows it -- the single place the reason is stated, so
+#: the error text and the check cannot disagree.
+_EXTENSION_RESTRICTIONS: tuple[tuple[tuple[str, str], tuple[str, ...], str], ...] = (
+    (
+        ("grader", "signature"),
+        (".c", ".cpp"),
+        "DMOJ's signature grader is C/C++ only",
+    ),
+    (
+        ("submission", "text"),
+        (".txt",),
+        "output-only submissions are text files",
+    ),
+)
+
+
+def extension_rules(axes: Mapping[str, str]) -> tuple[tuple[str, ...], str]:
+    """Model-solution extensions a model accepts, and why.
+
+    Returns ``(allowed, reason)``; ``reason`` is empty when the model accepts
+    every language, which is the error message's parenthetical.
 
     Two structural facts live here rather than in a per-model table (the plan is
     explicit that neither is a gap to be closed later):
@@ -215,11 +230,15 @@ def allowed_extensions(axes: Mapping[str, str]) -> tuple[str, ...]:
       signature models take ``.c``/``.cpp``;
     * output-only submissions are run by the ``TEXT`` executor, i.e. ``.txt``.
     """
-    if axes["grader"] == "signature":
-        return (".c", ".cpp")
-    if axes["submission"] == "text":
-        return (".txt",)
-    return (".c", ".cpp", ".hs", ".java", ".py")
+    for (axis, value), allowed, reason in _EXTENSION_RESTRICTIONS:
+        if axes[axis] == value:
+            return allowed, reason
+    return (".c", ".cpp", ".hs", ".java", ".py"), ""
+
+
+def allowed_extensions(axes: Mapping[str, str]) -> tuple[str, ...]:
+    """Convenience view of :func:`extension_rules` for callers that only need the set."""
+    return extension_rules(axes)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +248,15 @@ def allowed_extensions(axes: Mapping[str, str]) -> tuple[str, ...]:
 
 @dataclasses.dataclass(frozen=True)
 class ResolvedMeta:
-    """``meta.yml`` after preset expansion and validation."""
+    """``meta.yml`` after preset expansion and validation.
+
+    The named predicates below are the shape queries the other subcommands ask
+    of a model -- ``cases`` emits ``checker:``/``signature_grader:`` for
+    :attr:`uses_checker`/:attr:`uses_signature`, ``outputs`` copies files instead
+    of compiling for :attr:`is_output_only`, and the batch ladder is driven by
+    :attr:`is_batched`.  They exist so callers name the fact instead of comparing
+    axis strings, and so the fact is stated in one place.
+    """
 
     model: str
     solutionlang: str
@@ -244,24 +271,28 @@ class ResolvedMeta:
 
     @property
     def solution_limits(self) -> Limits:
+        """Limits for the model solution's language."""
         return self.limits[self.solutionlang]
 
     @property
     def uses_checker(self) -> bool:
+        """The model needs a custom checker (``checker: checker.py``)."""
         return self.axes["checker"] == "custom"
 
     @property
     def uses_signature(self) -> bool:
+        """The model is graded by ``signature_grader`` (C/C++ only)."""
         return self.axes["grader"] == "signature"
 
     @property
     def is_output_only(self) -> bool:
+        """The submission is a text file, so expected output is produced by copy."""
         return self.axes["submission"] == "text"
 
     @property
     def is_batched(self) -> bool:
+        """The model scores by subtask (one DMOJ batch per subtask)."""
         return self.axes["batch"] == "subtasks"
-
 
 def _valid(values) -> str:
     return ", ".join(sorted(values))
@@ -273,10 +304,10 @@ def _fail(source: str, message: str) -> MetaError:
 
 def _check_keys(raw: Mapping[str, Any], source: str) -> None:
     for key in raw:
-        if key in VALID_KEYS:
+        if isinstance(key, str) and key in VALID_KEYS:
             continue
         hint = ""
-        if key in RENAMED_KEYS:
+        if isinstance(key, str) and key in RENAMED_KEYS:
             hint = (
                 f" -- this meta.yml uses the pre-toolkit format; rename it to "
                 f"{RENAMED_KEYS[key]!r}"
@@ -398,16 +429,11 @@ def normalize(raw: Any, source: str = META_FILENAME) -> dict[str, Any]:
     model = raw.get(MODEL_KEY)
     if model is None:
         raise _fail(source, f"missing required key {MODEL_KEY!r}; valid models: {_valid(MODELS)}")
-    if model not in MODELS:
+    if not isinstance(model, str) or model not in MODELS:
         raise _fail(source, f"unknown model {model!r}; valid models: {_valid(MODELS)}")
 
     overrides = _check_axis_values(raw, source)
-    axes = {**MODELS[model], **overrides}
-    allowed = allowed_extensions(axes)
-    reason = {
-        (".c", ".cpp"): "DMOJ's signature grader is C/C++ only",
-        (".txt",): "output-only submissions are text files",
-    }.get(allowed, "")
+    allowed, reason = extension_rules({**MODELS[model], **overrides})
 
     if SOLUTIONLANG_KEY not in raw:
         raise _fail(
@@ -495,8 +521,13 @@ def load(problem_dir: Path | str) -> tuple[dict[str, Any], ResolvedMeta]:
             f"{path}: not found -- this directory is not a problemsetting problem "
             f"(scaffold one with `problemsetting new`)"
         )
-    with path.open() as handle:
-        raw = yaml.safe_load(handle)
+    try:
+        with path.open() as handle:
+            raw = yaml.safe_load(handle)
+    except yaml.YAMLError as error:
+        # Malformed YAML is an authoring error like any other: report the file and
+        # the parser's own complaint, rather than letting PyYAML's traceback escape.
+        raise MetaError(f"{path}: not valid YAML: {error}") from error
     if raw is None:
         raise _fail(str(path), "the file is empty")
     return normalize(raw, str(path)), resolve(raw, str(path))

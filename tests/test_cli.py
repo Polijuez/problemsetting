@@ -98,6 +98,13 @@ def test_new_accepts_a_language_without_the_leading_dot(tmp_path, monkeypatch) -
     assert meta_mod.load(tmp_path / "demo-ab")[1].solutionlang == ".cpp"
 
 
+def test_force_refuses_to_delete_a_file(tmp_path, monkeypatch, capsys) -> None:
+    (tmp_path / "demo").write_text("not a problem")
+    err = assert_fails(["new", "--force", "demo"], monkeypatch, tmp_path, capsys)
+    assert "is not a directory" in err
+    assert (tmp_path / "demo").read_text() == "not a problem"
+
+
 # ---------------------------------------------------------------------------
 # new: the error cases the ticket calls out
 # ---------------------------------------------------------------------------
@@ -131,10 +138,11 @@ def test_new_rejects_a_name_the_site_would_truncate(tmp_path, monkeypatch, capsy
     assert "at most 20" in err
 
 
-@pytest.mark.parametrize("name", ["--", "-leading", ""])
-def test_name_validation_rejects_argument_like_and_empty_names(name: str) -> None:
-    # argparse would swallow these before the subcommand sees them, so the rule
-    # is asserted on the validator the subcommand uses.
+@pytest.mark.parametrize("name", ["--", "-leading", "demo\n", "demo\nx"])
+def test_name_validation_rejects_argument_like_and_multi_line_names(name: str) -> None:
+    # argparse would swallow the argument-like names before the subcommand sees
+    # them, so the rule is asserted on the validator the subcommand uses.  The
+    # `\n` cases are why NAME_RE anchors with \Z rather than $.
     with pytest.raises(ProblemsettingError, match="invalid problem name"):
         validate_name(name)
 

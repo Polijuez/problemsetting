@@ -40,8 +40,9 @@ submissions:
     verdict: WA
     score: 0
 
-  # Correcta pero lentísima (suma de a uno).  Es la referencia del stress test,
-  # así que no declara veredicto: en los casos grandes daría TLE y en los chicos
-  # no, y lo que importa es que coincida con la solución modelo.
+  # Correcta pero de costo O(|b|).  No se le declara veredicto porque no da TLE
+  # con el `tl` de este problema (ver el comentario del archivo: ~0.24 s en el
+  # peor caso contra 1 s); su papel es ser la referencia del stress test, así que
+  # lo que importa es que coincida con la solución modelo en los casos chicos.
   - source: submissions/fuerza-bruta.cpp
     role: brute

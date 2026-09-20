@@ -190,6 +190,38 @@ def test_load_reports_a_missing_meta_yml(tmp_path) -> None:
     assert "meta.yml" in str(excinfo.value)
 
 
+def test_malformed_yaml_is_reported_as_an_authoring_error(tmp_path) -> None:
+    # A PyYAML ParserError escaping the CLI would be a traceback instead of
+    # `error: ...`, which the module's contract promises for authoring input.
+    (tmp_path / "meta.yml").write_text("model: [unclosed\nsolutionlang: .cpp\n")
+    with pytest.raises(MetaError, match="not valid YAML"):
+        meta.load(tmp_path)
+
+
+@pytest.mark.parametrize("model", [[], {}, 3, None])
+def test_a_non_string_model_is_rejected_rather_than_crashing(model: object) -> None:
+    with pytest.raises(MetaError):
+        meta.resolve({"model": model, "solutionlang": ".cpp"})
+
+
+@pytest.mark.parametrize("key", [1, None, ("model",)])
+def test_a_non_string_key_is_rejected_rather_than_crashing(key: object) -> None:
+    with pytest.raises(MetaError, match="unknown key"):
+        meta.resolve({"model": "standard", "solutionlang": ".cpp", key: "x"})
+
+
+def test_extension_rules_state_the_reason_they_narrow_the_set() -> None:
+    allowed, reason = meta.extension_rules(meta.MODELS["signature-batched"])
+    assert allowed == (".c", ".cpp")
+    assert "signature grader" in reason
+    allowed, reason = meta.extension_rules(meta.MODELS["output-only"])
+    assert allowed == (".txt",)
+    assert "text files" in reason
+    allowed, reason = meta.extension_rules(meta.MODELS["standard"])
+    assert allowed == (".c", ".cpp", ".hs", ".java", ".py")
+    assert reason == ""
+
+
 def test_load_reads_and_resolves(tmp_path) -> None:
     (tmp_path / "meta.yml").write_text("model: standard\nsolutionlang: .cpp\n")
     authoring, resolved = meta.load(tmp_path)

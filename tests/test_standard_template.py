@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from problemsetting import meta as meta_mod
 from problemsetting import templates
 
 MODEL = "standard"
@@ -42,16 +43,20 @@ def test_template_ships_the_whole_problem(template: Path) -> None:
 
 
 def test_template_meta_yml_is_a_valid_standard_problem() -> None:
-    authoring, resolved = templates_meta()
+    authoring, resolved = meta_mod.load(templates.template_dir(MODEL))
     assert authoring["model"] == "standard"
     assert resolved.executor == "CPP17"
+    assert resolved.solution_limits == meta_mod.Limits(1.0, 262144)
     assert not resolved.is_batched and not resolved.uses_checker
 
 
-def templates_meta():
-    from problemsetting import meta
-
-    return meta.load(templates.template_dir(MODEL))
+def test_template_comment_header_matches_the_generator_of_meta_yml(template: Path) -> None:
+    """The template's header is the one users see, so it tracks ``meta.HEADER``."""
+    text = (template / "meta.yml").read_text()
+    assert text.startswith(meta_mod.HEADER), (
+        "the standard template's meta.yml comment block has drifted from "
+        "problemsetting.meta.HEADER"
+    )
 
 
 # ---------------------------------------------------------------------------
