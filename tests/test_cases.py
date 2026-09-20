@@ -738,23 +738,49 @@ def test_archive_refuses_without_init_yml(tmp_path, monkeypatch, capsys) -> None
 # ---------------------------------------------------------------------------
 
 
-def test_build_runs_cases_then_fails_honestly_on_the_missing_outputs_step(
-    tmp_path, monkeypatch, capsys
-) -> None:
-    """Until ticket 03 lands, `build` must stop and say why -- not skip outputs."""
+def test_build_runs_cases_then_outputs_then_archive(tmp_path, monkeypatch, capsys) -> None:
+    """`build` is the three steps in order, and leaves a problem the judge can grade."""
     assert run(["new", "--model", STANDARD_MODEL, "demo-ab"], monkeypatch, tmp_path) == 0
     capsys.readouterr()
     problem = tmp_path / "demo-ab"
 
+    assert run(["build", "demo-ab"], monkeypatch, tmp_path) == 0
+    out = capsys.readouterr().out
+    # Order is the contract: `outputs` needs cases, `archive` needs outputs.
+    assert out.index("==> cases demo-ab") < out.index("==> outputs demo-ab")
+    assert out.index("==> outputs demo-ab") < out.index("==> archive demo-ab")
+    assert "expected output(s)" in out
+
+    # Every stage really ran: inputs, expected outputs, and a zip whose members
+    # are exactly the files init.yml names.
+    document = load_init(problem)
+    assert len(list(problem.glob("cases/*.in"))) == 21
+    assert len(list(problem.glob("cases/*.out"))) == 21
+    with zipfile.ZipFile(problem / "demo-ab.zip") as archive:
+        assert sorted(archive.namelist()) == sorted(
+            cases_mod.referenced_cases(document, str(problem / cases_mod.INIT_FILENAME))
+        )
+
+    # And the expected outputs are the model solution's own answers, not
+    # placeholders: 2 + 3 is the first case of the shipped template.
+    assert (problem / "cases" / "0.out").read_text() == "5\n"
+
+
+def test_build_stops_when_the_outputs_step_fails(tmp_path, monkeypatch, capsys) -> None:
+    """A broken model solution must not be papered over by an archive."""
+    assert run(["new", "--model", STANDARD_MODEL, "demo-ab"], monkeypatch, tmp_path) == 0
+    capsys.readouterr()
+    problem = tmp_path / "demo-ab"
+    (problem / "solution.cpp").write_text("int main() { this is not C++ }\n")
+
     assert run(["build", "demo-ab"], monkeypatch, tmp_path) == 1
     out, err = capsys.readouterr()
-    assert "==> cases demo-ab" in out
     assert "==> outputs demo-ab" in out
-    assert "no `outputs` step yet" in err
-    # The cases step really ran, and nothing was archived from a partial build.
-    assert (problem / cases_mod.INIT_FILENAME).is_file()
-    assert len(list(problem.glob("cases/*.in"))) == 21
+    assert "==> archive demo-ab" not in out, "archive must not run after a failed outputs"
+    assert "error:" in err
+    # Nothing gradeable was left behind: no zip, and no expected output.
     assert not (problem / "demo-ab.zip").exists()
+    assert not list(problem.glob("cases/*.out"))
 
 
 def test_build_reports_a_cases_failure_before_the_rest(tmp_path, monkeypatch, capsys) -> None:

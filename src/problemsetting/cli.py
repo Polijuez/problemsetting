@@ -23,6 +23,7 @@ from .errors import ProblemsettingError
 # one import each, and the dispatcher below never changes.
 from . import cases  # noqa: F401  (registers `cases`, `archive`, `build`)
 from . import judges  # noqa: F401  (registers `judges`)
+from . import outputs  # noqa: F401  (registers `outputs`)
 from . import scaffold  # noqa: F401  (registers `new`)
 
 

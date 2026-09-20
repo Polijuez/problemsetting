@@ -50,10 +50,9 @@ from typing import Any, Protocol
 
 import yaml
 
-from . import commands
 from . import meta as meta_mod
 from .commands import Command, register
-from .errors import CaseError, ProblemsettingError
+from .errors import CaseError
 
 GENERATOR_FILENAME = "generator.py"
 INIT_FILENAME = "init.yml"
@@ -583,17 +582,20 @@ def load_init(problem_dir: Path) -> dict[str, Any]:
     return document
 
 
-def referenced_cases(document: dict[str, Any], source: str) -> list[str]:
-    """Every ``in:``/``out:`` file ``init.yml`` names, in order, deduplicated.
+def _case_entries(document: dict[str, Any], source: str) -> list[dict[str, Any]]:
+    """Every case mapping ``init.yml`` declares, flattened and validated, in order.
 
-    This is the archive's membership rule: a zip whose members are exactly the
-    files the ``init.yml`` in the same directory references, so the two cannot
-    drift apart.
+    One traversal of the emitted structure, so the two readers below --
+    :func:`referenced_cases` (the archive's membership) and :func:`case_pairs`
+    (``outputs``' work list) -- cannot disagree about what the file contains.  A
+    hand-edited ``init.yml`` is the case both exist to catch, so a malformed entry
+    is a ``CaseError`` naming the offending value rather than a case silently
+    dropped from one list and not the other.
     """
     test_cases = document.get("test_cases")
     if not isinstance(test_cases, list) or not test_cases:
         raise CaseError(f"{source}: no test_cases -- run `problemsetting cases` first")
-    names: list[str] = []
+    entries: list[dict[str, Any]] = []
     for entry in test_cases:
         if not isinstance(entry, dict):
             raise CaseError(f"{source}: test_cases entries must be mappings, got {entry!r}")
@@ -605,15 +607,53 @@ def referenced_cases(document: dict[str, Any], source: str) -> list[str]:
         for child in children:
             if not isinstance(child, dict):
                 raise CaseError(f"{source}: test case entries must be mappings, got {child!r}")
-            for key in ("in", "out"):
-                value = child.get(key)
-                if value is None:
-                    continue
-                if not isinstance(value, str):
-                    raise CaseError(f"{source}: `{key}:` must be a file name, got {value!r}")
-                if value not in names:
-                    names.append(value)
+            entries.append(child)
+    return entries
+
+
+def _case_name(case: dict[str, Any], key: str, source: str) -> str | None:
+    """One ``in:``/``out:`` value, or ``None`` when the case declares neither."""
+    value = case.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise CaseError(f"{source}: `{key}:` must be a file name, got {value!r}")
+    return value
+
+
+def referenced_cases(document: dict[str, Any], source: str) -> list[str]:
+    """Every ``in:``/``out:`` file ``init.yml`` names, in order, deduplicated.
+
+    This is the archive's membership rule: a zip whose members are exactly the
+    files the ``init.yml`` in the same directory references, so the two cannot
+    drift apart.
+    """
+    names: list[str] = []
+    for case in _case_entries(document, source):
+        for key in ("in", "out"):
+            if (name := _case_name(case, key, source)) is not None and name not in names:
+                names.append(name)
     return names
+
+
+def case_pairs(document: dict[str, Any], source: str) -> list[tuple[str | None, str]]:
+    """Every ``(in, out)`` pair ``init.yml`` declares, in order, deduplicated by output.
+
+    ``outputs`` runs one case per output file and needs the input that produced
+    it; ``in`` is ``None`` for the output-only models, whose cases declare none
+    (DMOJ supplies an empty sealed stdin, ``dmoj/problem.py:489-493``).  A repeated
+    ``out`` -- a case selected by two subtasks -- is one expected output, so it is
+    run once.
+    """
+    pairs: list[tuple[str | None, str]] = []
+    seen: set[str] = set()
+    for case in _case_entries(document, source):
+        output = _case_name(case, "out", source)
+        if output is None or output in seen:
+            continue
+        seen.add(output)
+        pairs.append((_case_name(case, "in", source), output))
+    return pairs
 
 
 def run_archive(problem: str) -> int:
@@ -684,25 +724,16 @@ def run_build(problem: str, *, seed: int | None = None) -> int:
 
 
 def _run_outputs_step(problem: str) -> int:
-    """Run the ``outputs`` subcommand, or fail saying exactly what is missing.
+    """Run the ``outputs`` subcommand's implementation, not a re-parsed CLI call.
 
-    ``outputs`` is ticket 03.  Until it lands, ``build`` must stop after
-    ``cases`` and say so: silently skipping the step would leave a problem whose
-    ``init.yml`` references expected outputs that do not exist.
+    Imported here rather than at module level: ``outputs`` imports this module for
+    :func:`load_init` / :func:`case_pairs`, so a top-level import would be
+    circular.  Calling :func:`problemsetting.outputs.run_outputs` directly keeps
+    ``build`` on the same code path as the standalone subcommand.
     """
-    if "outputs" not in commands.COMMANDS:
-        raise ProblemsettingError(
-            f"this build of the toolkit has no `outputs` step yet (ticket 03), so "
-            f"`build` cannot finish {problem!r}: cases and init.yml are written, but "
-            f"there are no expected `cases/*.out` files for `archive` to bundle.  Run "
-            f"`problemsetting cases {problem}` and `problemsetting archive {problem}` "
-            f"separately once the outputs are in place"
-        )
-    # Imported here, not at module level: ``cli`` imports every subcommand module
-    # including this one, so a top-level import would be circular.
-    from . import cli
+    from . import outputs
 
-    return cli.main(["outputs", problem])
+    return outputs.run_outputs(problem)
 
 
 register(

@@ -30,3 +30,7 @@ class CaseError(ProblemsettingError):
 
 class JudgeError(ProblemsettingError):
     """The judge image, the container pool, or a grading run is unusable."""
+
+
+class OutputError(ProblemsettingError):
+    """The model solution cannot be built, run, or trusted as an expected output."""
