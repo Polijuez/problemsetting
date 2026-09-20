@@ -22,3 +22,7 @@ class MetaError(ProblemsettingError):
 
 class ScaffoldError(ProblemsettingError):
     """``problemsetting new`` cannot scaffold the requested problem."""
+
+
+class JudgeError(ProblemsettingError):
+    """The judge image, the container pool, or a grading run is unusable."""

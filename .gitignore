@@ -7,6 +7,9 @@ init.yml
 __meta__
 *.zip
 
+# The judge pool writes its generated config here (`problemsetting judges start`).
+.judge-pool/
+
 # --- compiled model solutions / scratch --------------------------------
 solution.exe
 solution.o

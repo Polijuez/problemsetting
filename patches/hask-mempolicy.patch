@@ -1,0 +1,16 @@
+diff --git a/.docker/tier3/Dockerfile b/.docker/tier3/Dockerfile
+index 671b32b3..58342abf 100644
+--- a/.docker/tier3/Dockerfile
++++ b/.docker/tier3/Dockerfile
+@@ -8,6 +8,11 @@ RUN mkdir /judge /problems && cd /judge && \
+ 	/env/bin/pip3 install -e . && \
+ 	/env/bin/python3 setup.py develop && \
+ 	HOME=~judge . ~judge/.profile && \
++	# GHC 9.x calls get_mempolicy/set_mempolicy (NUMA) in its runtime; the cptbox
++	# default allowlist lacks them, so the HASK self-test faults on syscall 239 and
++	# the executor is never registered. Allow them before running autoconf so that
++	# ghc lands in the baked runtime-paths.yml.
++	sed -i '/sys_rseq: ALLOW,/a\                sys_get_mempolicy: ALLOW,\n                sys_set_mempolicy: ALLOW,' /judge/dmoj/cptbox/isolate.py && \
+ 	runuser -u judge -w PATH -- /env/bin/dmoj-autoconf -V > /judge-runtime-paths.yml && \
+ 	echo '  crt_x86_in_lib32: true' >> /judge-runtime-paths.yml
+ 

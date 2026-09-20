@@ -21,6 +21,7 @@ from .errors import ProblemsettingError
 
 # Importing a subcommand module registers it.  Tickets 02-06 add theirs here --
 # one import each, and the dispatcher below never changes.
+from . import judges  # noqa: F401  (registers `judges`)
 from . import scaffold  # noqa: F401  (registers `new`)
 
 

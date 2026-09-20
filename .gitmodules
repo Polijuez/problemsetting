@@ -1,0 +1,3 @@
+[submodule "vendor/judge-server"]
+	path = vendor/judge-server
+	url = https://github.com/DMOJ/judge-server.git
