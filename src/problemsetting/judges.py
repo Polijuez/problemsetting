@@ -541,15 +541,32 @@ def run_command(
     """
     require_running(name)
     request = json.dumps({"id": command_id, "command": command, "timeout": timeout})
-    result = _run(
-        # The client is mounted by start_container, alongside the launcher.
-        ["podman", "exec", "-i", name, "/env/bin/python3", "/run/judge_runtime/client.py"],
-        input=request,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=timeout + 60,
-    )
+    try:
+        result = _run(
+            # The client is mounted alongside the launcher.
+            [
+                "podman",
+                "exec",
+                "-i",
+                name,
+                "/env/bin/python3",
+                "/run/judge_runtime/client.py",
+            ],
+            input=request,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            # The client enforces `timeout` itself and reports it as its own
+            # exit status; this outer bound only catches a client that died
+            # without reporting, which would otherwise hang the toolkit forever.
+            timeout=timeout + 60,
+        )
+    except subprocess.TimeoutExpired:
+        raise JudgeError(
+            f"the command never finished: {name} did not report a result for "
+            f"{command_id!r} within {timeout + 60:g}s.  The container may be stuck "
+            f"mid-compile; check it with 'podman logs {name}'"
+        ) from None
     output = result.stdout
     if result.stderr.strip():
         output += result.stderr
