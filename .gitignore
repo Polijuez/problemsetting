@@ -1,10 +1,23 @@
+# --- generated problem build artifacts (never committed) ---------------
+# init.yml is generated from meta.yml by `problemsetting cases`; meta.yml is the
+# hand-edited source of truth.
+init.yml
 *.in
 *.out
-__pycache__
 __meta__
-# generated problem build artifacts
 *.zip
+
+# --- compiled model solutions / scratch --------------------------------
 solution.exe
 solution.o
 solution.hi
 solution
+
+# --- python toolchain ---------------------------------------------------
+__pycache__
+*.pyc
+.venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/

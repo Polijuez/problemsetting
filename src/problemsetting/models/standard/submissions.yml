@@ -1,0 +1,47 @@
+# submissions.yml -- envíos declarados del problema, con el resultado que se
+# espera de cada uno.
+#
+# Es el archivo que consume `problemsetting verify`: en vez de confiar en una
+# convención de nombres (el toolkit viejo asumía que todo lo que estuviera en
+# submissions/ debía dar AC), cada envío declara acá qué veredicto y qué puntaje
+# tiene que obtener.  Así un envío no puede desincronizarse en silencio: si la
+# realidad no coincide con la expectativa declarada, `verify` falla.
+#
+# Campos:
+#   source   ruta al archivo de la submission, relativa a este archivo (o al
+#            directorio del problema).
+#   verdict  veredicto DMOJ esperado: AC, WA, TLE, MLE, RE, CE, ...
+#            Opcional: sin veredicto el envío se corre y se reporta de forma
+#            informativa, sin hacer fallar a `verify`.
+#   score    puntaje esperado sobre 100.  Opcional, igual que verdict.
+#   role     para qué sirve el envío dentro del toolkit:
+#              model   la solución modelo (la que genera los `.out`); se espera
+#                      puntaje completo.
+#              brute   la fuerza bruta de referencia: `verify` la usa para
+#                      comprobar que coincide con la solución modelo en los casos
+#                      chicos, y `problemsetting stress` la compara contra la
+#                      solución modelo sobre casos aleatorios.  Declarada una
+#                      sola vez, consumida por ambos.
+#              checker-test  salida deliberadamente malformada, para comprobar
+#                      que el checker la rechaza en vez de romperse.
+#
+# `role` es informativo: el toolkit no exige que exista ningún rol en particular.
+
+submissions:
+  # La solución modelo es la misma que produce los `.out`, así que se declara acá
+  # por ruta en vez de duplicarla en submissions/.
+  - source: solution.cpp
+    verdict: AC
+    score: 100
+    role: model
+
+  # Imprime a + b + 1: falla todos los casos, por lo tanto 0 puntos.
+  - source: submissions/incorrecto.cpp
+    verdict: WA
+    score: 0
+
+  # Correcta pero lentísima (suma de a uno).  Es la referencia del stress test,
+  # así que no declara veredicto: en los casos grandes daría TLE y en los chicos
+  # no, y lo que importa es que coincida con la solución modelo.
+  - source: submissions/fuerza-bruta.cpp
+    role: brute

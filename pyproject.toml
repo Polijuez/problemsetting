@@ -1,9 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "problemsetting"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
+description = "Problem authoring toolkit for the Polijuez (DMOJ) online judge"
 requires-python = ">=3.13"
 dependencies = [
     "pyyaml>=6.0.3",
 ]
+
+[project.scripts]
+problemsetting = "problemsetting.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/problemsetting"]
+
+# Templates are package data: everything under src/problemsetting/models/ ships,
+# except caches and generated build artifacts.
+[tool.hatch.build]
+exclude = [
+    "**/__pycache__",
+    "**/*.pyc",
+    "**/init.yml",
+    "**/*.zip",
+    "**/*.in",
+    "**/*.out",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
