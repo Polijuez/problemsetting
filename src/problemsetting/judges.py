@@ -64,6 +64,15 @@ PROBLEMS_MOUNT = "/problems"
 #: numeric suffix, which is what makes the pool survive between invocations.
 NAME_PREFIX = "polijuez-judge-"
 
+#: Paths under the problems mount that must NOT be discoverable as problems.
+#: The vendored judge-server is the important one: its own testsuite ships ~46
+#: problems, several of which collide with natural author names (``batched``,
+#: ``easy``, ``sorted``, ``generator``, ``aplusb``).  DMOJ discovers recursively,
+#: so without masking them an author's ``batched`` silently loses the
+#: duplicate-name race to DMOJ's and the judge grades the wrong problem.
+#: ``.judge-pool`` holds the generated config and is masked for tidiness.
+MASKED_UNDER_PROBLEMS = ("vendor", ".judge-pool")
+
 #: Cap on the ``nproc``-derived default pool size (decision Q28).  Each judge
 #: holds a self-tested executor set and grades one submission at a time, so the
 #: useful parallelism is bounded well below the core count on a big machine;
@@ -328,6 +337,18 @@ def pool_dir(root: Path) -> Path:
     return root / ".judge-pool"
 
 
+def mask_dir(root: Path) -> Path:
+    """Create and return the empty directory bound over :data:`MASKED_UNDER_PROBLEMS`.
+
+    One empty directory serves every mask target: the containers only ever see
+    its emptiness, never its contents.  It lives inside :func:`pool_dir` so a
+    single ``rm -rf`` of the pool directory cleans up both.
+    """
+    path = pool_dir(root) / "mask"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 # ---------------------------------------------------------------------------
 # Starting and stopping containers
 # ---------------------------------------------------------------------------
@@ -419,6 +440,26 @@ def container_run_args(
         "JUDGE_CONFIG=/judge.yml",
         "-v",
         f"{problems_root}:{PROBLEMS_MOUNT}:z",
+    ]
+    # Mask the vendored judge-server, whose own testsuite ships ~46 problems
+    # (``batched``, ``easy``, ``sorted``, ``generator``, ``aplusb``, ...).  DMOJ
+    # discovers with ``glob.iglob(..., recursive=True)`` over ``/problems/**/``,
+    # so it descends into ``vendor/judge-server/testsuite/`` and finds them --
+    # and a problem the author names ``batched`` then loses the duplicate-name
+    # race to DMOJ's, so the judge silently grades the WRONG problem.  Measured:
+    # without this mask discovery returns 62 init.yml of which 46 are the
+    # vendored suite's; with it, 15 and only the author's.
+    #
+    # An empty bind-mount over the path is what actually hides it: ``--tmpfs``
+    # does not override an existing volume mount at the same target, and a
+    # glob-level exclusion is not available (the judge takes globs, not
+    # patterns to skip).  The mask directory is created empty and never written.
+    mask = mask_dir(problems_root)
+    for relative in MASKED_UNDER_PROBLEMS:
+        target = problems_root / relative
+        if target.exists():
+            args += ["-v", f"{mask}:{PROBLEMS_MOUNT}/{relative}:z"]
+    args += [
         "-v",
         f"{config}:/judge.yml:z",
         "-v",
