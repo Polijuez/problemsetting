@@ -1,0 +1,114 @@
+# submissions.yml -- envíos declarados del problema, con el resultado que se
+# espera de cada uno.
+#
+# Es el archivo que consume `problemsetting verify`: en vez de confiar en una
+# convención de nombres (el toolkit viejo asumía que todo lo que estuviera en
+# submissions/ debía dar AC), cada envío declara acá qué veredicto y qué puntaje
+# tiene que obtener.  Así un envío no puede desincronizarse en silencio: si la
+# realidad no coincide con la expectativa declarada, `verify` falla.
+#
+# Campos:
+#   source   Ruta al archivo de la submission, relativa al directorio del
+#            problema.  Obligatorio.
+#   verdict  Veredicto DMOJ esperado: AC, WA, TLE, MLE, OLE, RTE, IR, SC o CE.
+#            Opcional.
+#   score    Puntaje esperado, como porcentaje del total del problema (0 a 100).
+#            Opcional.
+#   role     Para qué sirve el envío dentro del toolkit.  Informativo para
+#            `verify`; los tickets posteriores leen este campo en vez de volver a
+#            declarar el envío:
+#              model         la solución modelo (la que produce los `.out`).
+#              brute         la fuerza bruta de referencia, que el stress test
+#                            compara contra la solución modelo sobre casos
+#                            diminutos.
+#              checker-test  salida deliberadamente malformada, para comprobar
+#                            que el checker la rechaza en vez de romperse.
+#            Opcional.
+#   executor Ejecutor DMOJ con el que se corre este envío, cuando no se quiere
+#            inferir del sufijo del archivo (por ejemplo PYPY3 para un `.py`, o
+#            CPP20 para un `.cpp`).  Opcional.
+#
+# Un envío sin `verdict` ni `score` es informativo: se corre y se reporta, pero no
+# puede hacer fallar a `verify`.
+#
+# Los límites salen de `meta.yml`: el lenguaje del envío se infiere de su sufijo
+# (con `executor` como override) y se usan el `tl` y el `ml` declarados para ese
+# lenguaje.  Un lenguaje sin entrada en `limits:` usa 2 s / 262144 KiB.
+#
+# En este modelo **todos los envíos son `.txt`**: el sufijo se mapea al ejecutor
+# `TEXT` (que es `cat`), no a un lenguaje de programación.  No hay compilación, y
+# no hay `role: brute`: la fuerza bruta de `stress` es un programa, y acá no hay
+# ninguna submission que lo sea.  Por eso `verify` va a reportar la comprobación 3
+# (`TLE`) y la 4 (fuerza bruta) como *skipped con el motivo*, que es la respuesta
+# correcta: este problema no tiene nada con qué ejercitarlas.  La 5 (checker) sí
+# corre, porque este modelo tiene checker.
+#
+# SOBRE EL PUNTAJE PARCIAL DE ESTE PROBLEMA -- leer antes de tocar `parcial.txt`
+# ---------------------------------------------------------------------------
+#
+# `parcial.txt` es un envío **válido y no mínimo**: representa el objetivo con 10
+# sumandos cuando el mínimo es 9, así que el checker le otorga
+# `0.7 * point_value`, que es un `CheckerResult` con puntaje fraccionario real.
+# `score: 70` acá es ese 0.7, y es medible de punta a punta:
+#
+#   * El juez sabe el puntaje por caso (`Result.points`, `dmoj/result.py:48,77`)
+#     y `packet.py:309` le pasa el `Result` entero a `test_case_status_packet`.
+#   * La consola del juez no lo imprime (`dmoj/judge.py:216` `_ipc_result` arma la
+#     línea con códigos, tiempo, memoria y feedback), pero el launcher del pool
+#     sí lo emite por caso -- envuelve ese mismo paquete -- y `judges` lo expone
+#     como `CaseResult.points`/`total`.
+#   * `verify` entonces puntúa la fracción en lugar de darle el lote entero por
+#     ser AC.  Corrida observada: `batch 1  70/100 pts  AC`.
+#
+# Esa fracción es lo que hace que este problema valga como fixture del modelo: un
+# checker que otorga puntaje parcial de verdad, y una expectativa que sólo pasa si
+# esa fracción se mide.
+#
+# Los otros envíos no se ven afectados, y por eso este problema sigue probando lo
+# que tiene que probar: `no-representa.txt` saca 0 y `malformado.txt` da WA, dos
+# resultados que el veredicto sí distingue del AC del puntaje parcial.
+
+submissions:
+  # La solución modelo es el propio `solution.txt`, que es también lo que
+  # `problemsetting outputs` copia a `cases/{i}.out`.  Declararla acá por ruta en
+  # vez de duplicarla en submissions/ es lo que garantiza que los `.out` y el
+  # envío que dice ser correcto no puedan divergir.
+  #
+  # `TEXT` corre `cat` sobre este archivo y el checker lo puntúa: 9 sumandos
+  # contra un mínimo de 9, o sea puntaje completo.
+  - source: solution.txt
+    verdict: AC
+    score: 100
+    role: model
+
+  # Válido pero no mínimo: la misma representación con el mayor sumando partido
+  # en sus dos Fibonacci anteriores (75025 = 46368 + 28657), o sea 10 sumandos
+  # donde el mínimo es 9.  El checker lo acepta con `0.7 * 100`.
+  #
+  # Ojo: NO lleva `role: checker-test`.  Ese rol es para la salida que el checker
+  # debe *rechazar*; ésta la acepta con puntaje parcial, así que ponerle ese rol
+  # haría que la comprobación 5 la leyera como un rechazo faltante.
+  - source: submissions/parcial.txt
+    verdict: AC
+    score: 70
+
+  # Formato perfecto, objeto inválido: 9 sumandos admisibles que **no** suman el
+  # objetivo (sólo cambia un sumando, y con eso la suma cae a 71343).  El checker
+  # lo valida y devuelve `CheckerResult(False, 0)`, así que el lote no se lleva
+  # nada: WA y 0.  Es el sujeto de la comprobación 2 de `verify`.
+  #
+  # Esta es la distinción que el modelo existe para mostrar: el puntaje mide el
+  # objeto construido, no haber acertado el formato.  Un checker que puntuara por
+  # la cantidad declarada le daría 100 a este archivo.
+  - source: submissions/no-representa.txt
+    verdict: WA
+    score: 0
+
+  # Texto donde el formato pide números.  Es el sujeto de la comprobación 5.  El
+  # checker lo rechaza con WA en su rama barata y determinista; un checker que se
+  # rompiera con basura daría error interno y `verify` lo reportaría como problema
+  # roto.
+  - source: submissions/malformado.txt
+    verdict: WA
+    score: 0
+    role: checker-test

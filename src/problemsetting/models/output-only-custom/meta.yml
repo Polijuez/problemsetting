@@ -1,0 +1,58 @@
+# meta.yml -- intención de autoría del problema.  Es el único archivo de
+# configuración que se edita a mano: init.yml se genera a partir de este.
+#
+#   model:        preset del problema, uno de los 8 modelos del toolkit.
+#   solutionlang: extensión de la solución modelo (.c, .cpp, .hs, .java, .py
+#                 y .txt en los modelos output-only).
+#   limits:       límites por lenguaje, valores absolutos: tl en segundos y
+#                 ml en KiB (la unidad de DMOJ).  Los lenguajes que no
+#                 aparezcan usan 2 s / 262144 KiB.
+#   grader, checker, batch, io, submission, executor:
+#                 overrides opcionales de los ejes del preset.
+#
+# Los ejes expandidos no se escriben acá: `model:` más los overrides son la
+# fuente de verdad y el toolkit los resuelve en cada corrida.
+model: output-only-custom
+solutionlang: .txt
+limits:
+  .txt:
+    tl: 1.0
+    ml: 65536
+
+# Lo que este preset expande (no se escribe, se documenta):
+#
+#   grader: standard       (el grader normal de DMOJ)
+#   checker: custom        -> `checker: checker.py` en init.yml
+#   batch: single          (un lote que paga todo de una)
+#   io: stdio
+#   submission: text       -> `.txt` -> ejecutor TEXT (`cat`)
+#
+# Este modelo es el cruce de los dos ejes que ya existen por separado:
+# `submission: text` (como `output-only`) y `checker: custom` (como `custom`).
+# Ninguno de los dos se inventa acá -- lo que este modelo agrega es la
+# combinación, y con ella una consecuencia que ninguno de los dos tiene solo:
+#
+#   * `output-only` no tiene checker, así que compara por igualdad.
+#   * `custom` tiene checker, pero tiene input, así que su checker saca la
+#     instancia del `judge_input`.
+#   * `output-only-custom` tiene checker y **no** tiene input: `judge_input`
+#     llega vacío, así que el objetivo del problema es una constante del
+#     problema (ver `checker.OBJETIVO` y `generator.OBJETIVO`) y no puede haber
+#     más de un caso.
+#
+# `checker: custom` NO es `custom_judge:`.  Son dos mecanismos distintos:
+#
+#   * `checker: checker.py` reemplaza **sólo la comparación**.  El
+#     `StandardGrader` sigue manejando: lanza el proceso (`cat` en este modelo),
+#     mide tiempo y memoria, y después llama a `check()` para decidir veredicto y
+#     puntaje.  Es lo que usan `custom`, `batched-custom` y `output-only-custom`.
+#   * `custom_judge: f.py` reemplaza **el grader entero** (`CustomGrader` carga
+#     `f.Grader`).  Los problemas de `ipsjuezproblemset` que lo usan no lo hacen
+#     para comparar distinto sino para E/S por archivo: su `fileiograder.py` sólo
+#     extiende `StandardGrader` para permitir escritura en el directorio de
+#     trabajo y leer la salida de un archivo.
+#
+# El puntaje parcial sale de `CheckerResult.points`, que puede ser fraccionario
+# (`dmoj/graders/standard.py:36-40` toma el veredicto de `check.passed` y el
+# puntaje de `check.points`).  No hace falta motor nuevo: hace falta esta
+# plantilla.
