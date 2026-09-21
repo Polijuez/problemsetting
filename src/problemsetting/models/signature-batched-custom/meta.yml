@@ -1,0 +1,76 @@
+# meta.yml -- intención de autoría del problema.  Es el único archivo de
+# configuración que se edita a mano: init.yml se genera a partir de este.
+#
+#   model:        preset del problema, uno de los 8 modelos del toolkit.
+#   solutionlang: extensión de la solución modelo (.c, .cpp, .hs, .java, .py
+#                 y .txt en los modelos output-only).
+#   limits:       límites por lenguaje, valores absolutos: tl en segundos y
+#                 ml en KiB (la unidad de DMOJ).  Los lenguajes que no
+#                 aparezcan usan 2 s / 262144 KiB.
+#   grader, checker, batch, io, submission, executor:
+#                 overrides opcionales de los ejes del preset.
+#
+# Los ejes expandidos no se escriben acá: `model:` más los overrides son la
+# fuente de verdad y el toolkit los resuelve en cada corrida.
+model: signature-batched-custom
+solutionlang: .cpp
+# Este modelo es la combinación de las tres piezas: `batched-custom` (subtareas +
+# checker de calidad) con el grader de firma encima.  Lo que agrega la firma es
+# *qué* entrega el concursante -- una función, no un programa -- y eso no toca los
+# límites ni los puntajes: la escalera y el checker son los mismos de
+# `batched-custom`.
+#
+# Los dos lenguajes, y por qué no son dos modelos: el grader de firma de DMOJ lo
+# aplican tanto el ejecutor de C como el de C++ (`is_signature_gradable`, en
+# `dmoj/executors/c_like_executor.py:165-172`), así que **C es una elección de
+# lenguaje, no un modelo aparte** -- se elige con `solutionlang: .c`.  Por eso la
+# plantilla trae las dos soluciones modelo (`solution.c` y `solution.cpp`, la
+# misma solución en dos lenguajes) y los dos límites declarados.
+#
+# `.cpp` y no `.c` como valor por defecto: es el lenguaje que muestra la interfaz
+# del enunciado y el que usa la solución que produce los `.out`.  Va explícito acá
+# en vez de deducirse del listado de archivos -- con dos soluciones presentes, "el
+# primero que aparece" no diría nada.
+#
+# Lo que este preset expande (no se escribe, se documenta):
+#
+#   grader: signature      -> `signature_grader:` en init.yml
+#   checker: custom        -> `checker: checker.py` en init.yml
+#   batch: subtasks        -> un `batched:` por subtarea, con sus puntos
+#   io: stdio
+#   submission: program
+#
+# Las tres piezas y su interacción, que es la razón de que este modelo exista:
+#
+#   * `checker: custom` NO es `custom_judge:`.  `checker: checker.py` reemplaza
+#     **sólo la comparación**; el `StandardGrader` sigue manejando (lanza el
+#     proceso, mide tiempo y memoria, y después llama a `check()` para decidir
+#     veredicto y puntaje).  Es lo que usan `custom`, `batched-custom`,
+#     `output-only-custom` y este modelo.
+#
+#   * `signature_grader:` reemplaza al `StandardGrader` por el `SignatureGrader`,
+#     que compone el envío con el header y el evaluador y deja el resultado en
+#     manos del grader de siempre (`SignatureGrader` extiende `StandardGrader`;
+#     `dmoj/graders/signature.py`).  Por eso el checker y la escalera siguen
+#     funcionando igual que en `batched-custom`: lo único que cambió es cómo se
+#     construye el binario que se evalúa.
+#
+#   * `batch: subtasks` hace que `init.yml` emita un `batched:` por subtarea.  El
+#     juez trata cada lote como una unidad para el cortocircuito, pero llama al
+#     checker una vez por caso -- y `point_value` es el `points:` del LOTE de ese
+#     caso (`dmoj/problem.py:234-238` propaga el lote a cada caso hijo).  O sea
+#     que `0.7 * point_value` significa «0.7 de la subtarea de este caso».  Un
+#     checker escrito suponiendo que `point_value` es el total puntúa mal acá.
+#
+# El puntaje parcial sale de `CheckerResult.points`, que puede ser fraccionario
+# (`dmoj/graders/standard.py:37-40` toma el veredicto de `check.passed` y el
+# puntaje de `check.points`).  No hace falta motor nuevo: hace falta esta
+# plantilla.  El límite de 1 s no separa complejidades acá -- todas las soluciones
+# del problema son O(n) -- así que no hay envío declarado por tiempo.
+limits:
+  .c:
+    tl: 1.0
+    ml: 262144
+  .cpp:
+    tl: 1.0
+    ml: 262144

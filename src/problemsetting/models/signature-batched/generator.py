@@ -15,10 +15,12 @@ los casos chicos se lleva los puntos de los lotes chicos.
 La diferencia con el modelo `batched` es *qué* escribe el concursante: acá no
 escribe un programa entero sino **una función**, declarada en `signature.hpp`, y
 el evaluador `evaluator.cpp` se encarga de leer la entrada, llamarla e imprimir
-el resultado.  El contenido y la escalera de subtareas son deliberadamente los
-mismos que los de la plantilla `batched` -- ver el comentario de `signature.hpp`
-y de `evaluator.cpp` -- así que las dos plantillas son comparables línea a línea
-salvo por la interfaz.
+el resultado.  La función se puede implementar en **C o en C++**: el mecanismo es
+el mismo en los dos (ver `signature.hpp`), y lo único que elige el autor es el
+lenguaje de su solución modelo (`solutionlang`).  El contenido y la escalera de
+subtareas son deliberadamente los mismos que los de la plantilla `batched` --
+ver el comentario de `signature.hpp` y de `evaluator.cpp` -- así que las dos
+plantillas son comparables línea a línea salvo por la interfaz.
 
 El enunciado: dada una cadena `s` de letras minúsculas, se pide la longitud del
 substring contiguo más largo que sea palíndromo.  La función que ve el
@@ -48,13 +50,15 @@ subtareas y los puntajes esperados de submissions.yml dejan de significar nada.
 
 Dónde cae la cuadrática depende del lenguaje, y en este problema eso no es
 teórico: la plantilla `batched` (mismo enunciado, misma escalera) se corta en
-Python ya en ST2, mientras que en C++ -- que es el único lenguaje que este modelo
-acepta, porque el grader de firma es C/C++ -- la cuadrática pasa ST1, ST2 y ST3
-enteras y sólo se cae en el caso uniforme de 10^5 de ST4.  Es el motivo por el
-que los `score` de submissions.yml salen de una corrida real de
-`problemsetting verify` y no de copiar los de la otra plantilla.  Los cortes no se
-eligieron a ojo: están puestos donde una corrida real mostró la separación, y si
-cambiás el `tl` de meta.yml tenés que volver a ubicarlos así.
+Python ya en ST2, mientras que en los dos lenguajes que este modelo acepta -- C
+y C++ -- la cuadrática pasa ST1, ST2 y ST3 enteras y sólo se cae en el caso
+uniforme de 10^5 de ST4.  Lo mismo vale para la lineal: los `.out` que produce
+`solution.c` y los que produce `solution.cpp` tienen que coincidir, y si no
+coinciden el problema está mal armado, no "el lenguaje es distinto".  Es el
+motivo por el que los `score` de submissions.yml salen de una corrida real de
+`problemsetting verify` y no de copiar los de la otra plantilla.  Los cortes no
+se eligieron a ojo: están puestos donde una corrida real mostró la separación, y
+si cambiás el `tl` de meta.yml tenés que volver a ubicarlos así.
 """
 
 import random
@@ -206,13 +210,13 @@ def gen_st2(cases, rand):
 # ── Subtarea 3: ~N <= 5000~ ───────────────────────────────────────────
 def gen_st3(cases, rand):
     # 5000 caracteres uniformes son ~1.25*10^7 comparaciones en la expansión
-    # alrededor de cada centro.  En C++ eso son milisegundos -- medido en el
-    # contenedor del juez, la cuadrática pasa esta subtarea con holgura -- así que
-    # el caso NO separa complejidades acá (en la plantilla `batched`, en Python,
-    # sí).  Está igual porque la escalera es la misma que la de `batched`, que es
-    # lo que hace comparables a las dos plantillas, y porque una solución
-    # deliberadamente peor que la cuadrática sí se cae.  El corte real de la
-    # cuadrática en C++ es ST4 (10^5 caracteres).
+    # alrededor de cada centro.  Tanto en C como en C++ eso son milisegundos --
+    # medido en el contenedor del juez, la cuadrática pasa esta subtarea con
+    # holgura -- así que el caso NO separa complejidades acá (en la plantilla
+    # `batched`, en Python, sí).  Está igual porque la escalera es la misma que
+    # la de `batched`, que es lo que hace comparables a las dos plantillas, y
+    # porque una solución deliberadamente peor que la cuadrática sí se cae.  El
+    # corte real de la cuadrática es ST4 (10^5 caracteres), en los dos lenguajes.
     cases.append(TestCase(uniforme("a", LIM_ST3)))
     cases.append(TestCase(alternante(LIM_ST3)))
     cases.append(TestCase(con_palindromo(rand, LIM_ST3, 4000)))

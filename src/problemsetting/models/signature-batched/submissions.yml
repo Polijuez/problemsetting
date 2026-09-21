@@ -38,13 +38,29 @@
 # unidad de traducción (el mecanismo completo está comentado en `signature.hpp`).
 #
 # La consecuencia para este archivo es que hay una clase de envío que sólo existe
-# acá: el que **viola el contrato del header**.  `firma-incorrecta.cpp` define una
-# función con el nombre correcto y el algoritmo correcto, pero con la firma
-# equivocada, así que no implementa lo que `evaluator.cpp` llama.  El veredicto
-# observable es **CE** -- el juez no consigue compilar la composición -- y no WA:
-# el envío nunca llega a correr.  Es la comprobación de que el mecanismo de firma
-# está en vigor; con un problema de E/S normal, ese mismo archivo compilaría y
-# daría AC.
+# acá: el que **viola el contrato del header**.  Ahí están `firma-incorrecta.cpp`
+# (toma `std::string` por valor) y `firma-incorrecta.c` (devuelve `long long`):
+# los dos definen una función con el nombre correcto y el algoritmo correcto,
+# pero con la firma equivocada, así que ninguno implementa lo que `evaluator.cpp`
+# llama.  El veredicto observable es **CE** -- el juez no consigue compilar la
+# composición -- y no WA: el envío nunca llega a correr.  Es la comprobación de
+# que el mecanismo de firma está en vigor; con un problema de E/S normal, esos
+# mismos archivos compilarían y darían AC.
+#
+# ── Los dos lenguajes ────────────────────────────────────────────────────────
+#
+# La plantilla trae el mismo problema resuelto en C (`solution.c`) y en C++
+# (`solution.cpp`), porque el mecanismo de firma es el mismo en los dos ejecutores
+# y lo único que elige el autor es `solutionlang`.  Por eso el manifest declara
+# las dos soluciones modelo: son la evidencia, medida contra el juez real, de
+# que la composición no depende del lenguaje.  `solution.cpp` lleva
+# `role: model` (es la que produce los `.out` de la plantilla, que corre con el
+# `solutionlang: .cpp` de meta.yml) y `solution.c` no lo lleva -- las dos tienen
+# que dar AC 100, y cualquiera de las dos sería una solución modelo legítima.
+#
+# Ojo con el límite: un envío `.c` se corre con el `tl`/`ml` de `limits[.c]` y
+# uno `.cpp` con los de `limits[.cpp]`.  Están declarados los dos, así que los dos
+# se gradúan con 1 s -- ver `meta.yml`.
 #
 # Las expectativas de abajo salen de una corrida real de `problemsetting verify`.
 # En un problema con subtareas eso no es un detalle: DMOJ corta el lote apenas un
@@ -74,12 +90,23 @@ submissions:
   # que se declara acá por ruta en vez de duplicarla en submissions/.
   #
   # Es también la prueba de que el contrato del header se puede cumplir: define
-  # exactamente la función declarada -- `const std::string&`, no una copia -- y
-  # por eso compila y saca 100.
+  # exactamente la función declarada -- `const char *`, que es la firma de la
+  # interfaz -- y por eso compila y saca 100.
   - source: solution.cpp
     verdict: AC
     score: 100
     role: model
+
+  # La misma solución, en C.  No lleva `role: model` porque `verify` exige que el
+  # envío con ese rol saque 100 y **no** admite dos sujetos que se contradigan: la
+  # solución modelo del problema es una, y es `solution.cpp` (el `solutionlang` de
+  # meta.yml).  Esta entrada existe para lo otro que el rol no dice: que el
+  # problema también se resuelve desde C, medido con el ejecutor `C11` -- o sea
+  # con el evaluador compilado como C, que es la parte que no se puede dar por
+  # sentada.
+  - source: solution.c
+    verdict: AC
+    score: 100
 
   # Correcta pero demasiado lenta: es el envío que ejercita la comprobación 3
   # ("un envío correcto pero lento da TLE").  Es la misma idea cuadrática que
@@ -114,12 +141,20 @@ submissions:
   # mismo nombre de función y mismo algoritmo, firma distinta.  El juez no
   # consigue compilar la composición y el veredicto es CE -- nunca corre.  Es el
   # sujeto de la comprobación 2 de `verify` (un envío destinado a fallar recibe
-  # el veredicto que declara), y el único veredicto de este problema que no es
-  # AC ni TLE.
+  # el veredicto que declara).
   #
   # No declara `score:` a propósito: un envío que el juez nunca llegó a correr no
   # tiene puntaje que comparar, y `verify` trata cualquier `score` declarado sobre
   # una corrida sin casos como un incumplimiento (incluso `score: 0`, que no es
   # lo mismo que "no se corrió").  El veredicto `CE` es la afirmación entera.
+  # Esto vale igual para la variante en C de abajo.
   - source: submissions/firma-incorrecta.cpp
+    verdict: CE
+
+  # La misma violación, desde C: el tipo de retorno es `long long` donde el header
+  # declara `int`.  Es el envío que prueba que la interfaz se aplica **también**
+  # cuando el que se equivoca escribe C -- si el header estuviera en C++ (con
+  # `std::string`), este archivo no sería ni siquiera un envío plausible del
+  # problema, y la variante C del modelo no existiría.
+  - source: submissions/firma-incorrecta.c
     verdict: CE

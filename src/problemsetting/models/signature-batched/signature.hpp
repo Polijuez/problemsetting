@@ -14,11 +14,12 @@
 //     #define main main_<uuid>
 //     <envío del concursante, tal cual>
 //
-// y lo pasa como `aux_sources` al ejecutor de C++, que además agrega el
+// y lo pasa como `aux_sources` al ejecutor del lenguaje, que además agrega el
 // `evaluator.cpp` de `init.yml` (`signature_grader: {entry: evaluator.cpp, ...}`).
 // Los tres archivos se compilan **juntos, como una sola unidad de traducción**:
 //
 //     g++ -Wall <id>_submission.cpp signature.hpp <id>cpp.cpp -DONLINE_JUDGE ...
+//     gcc -Wall <id>_submission.c   signature.hpp <id>c.c   -DONLINE_JUDGE ...
 //
 // Tres consecuencias que explican por qué este archivo tiene la forma que tiene:
 //
@@ -34,21 +35,52 @@
 //   3. Todo se compila en una sola unidad, así que aquí sólo se **declara**.  Las
 //      definiciones, si las hubiera, tendrían que ser `inline`; no las hay.
 //
+// ── Por qué la interfaz está escrita en C y no en C++ ───────────────────────
+//
+// El mismo header sirve a un envío en **C** y a uno en **C++**: DMOJ le pone
+// `is_signature_gradable` al ejecutor de C y al de C++ por igual
+// (`dmoj/executors/c_like_executor.py:165-172`), así que el mecanismo es el mismo
+// y lo único que elige el autor es el lenguaje de la solución modelo
+// (`solutionlang`), no el modelo.  Hay una razón estructural y no estilística
+// para el subconjunto común:
+//
+//   * los envios de los dos lenguajes tienen que linkear contra el **mismo**
+//     evaluador, y el evaluador es un solo archivo (`evaluator.cpp` en
+//     `init.yml`) que el juez renombra a `<id>c.c` o a `<id>cpp.cpp` según el
+//     ejecutor -- o sea que **su contenido se compila como C cuando el modelo es
+//     C, y como C++ cuando es C++**.  Un evaluador con `std::cin` directamente no
+//     compilaría en la variante C;
+//   * por lo mismo, la declaración tiene que ser válida en los dos lenguajes: un
+//     `std::string` acá haría el modelo inutilizable desde C.
+//
+// De ahí las dos formas de este archivo: los tipos del subconjunto común
+// (`const char *`, `int`) y las guardas de `extern "C"`, que le dicen al
+// compilador de C++ que el símbolo es el de C -- sin *name mangling* -- para que
+// el `int subpalindromo(const char *)` que define una solución en C sea
+// exactamente el que llama el evaluador.  Sin ellas, las dos variantes no
+// linkearían entre sí.
+//
 // El nombre de la función lo elige el autor del problema, pero **una vez
 // publicado es la interfaz**: cambiarlo invalida todos los envíos de los
-// concursantes (y los de submissions.yml).  `evaluator.cpp` y `solution.cpp` lo
-// usan; los tres tienen que estar de acuerdo.
+// concursantes (y los de submissions.yml).  `evaluator.cpp`, `solution.c` y
+// `solution.cpp` lo usan; los cuatro tienen que estar de acuerdo.
 
 #ifndef SIGNATURE_BATCHED_HPP_INCLUDED
 #define SIGNATURE_BATCHED_HPP_INCLUDED
 
-#include <string>
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // Devuelve la longitud del substring **contiguo** más largo de `s` que sea un
-// palíndromo.  `s` no está vacía: 1 <= s.size() <= 100000.
+// palíndromo.  `s` no está vacía: 1 <= strlen(s) <= 100000.
 //
 // El evaluador lee `s` de la entrada estándar y llama a esta función una vez por
 // caso; no hay estado compartido entre casos (cada corrida es un proceso nuevo).
-int subpalindromo(const std::string& s);
+int subpalindromo(const char *s);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif  // SIGNATURE_BATCHED_HPP_INCLUDED

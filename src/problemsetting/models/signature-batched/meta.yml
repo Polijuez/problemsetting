@@ -19,17 +19,29 @@ solutionlang: .cpp
 # cambia es *qué* escribe el concursante -- una función contra `signature.hpp`
 # en vez de un programa entero -- y eso no toca los límites.
 #
-# Sólo `.cpp`: el grader de firma de DMOJ existe únicamente para C y C++ (lo
-# aplica `is_signature_gradable`, que sólo está en esos dos ejecutores), así que
-# un límite para otro lenguaje sería configuración muerta -- el toolkit rechaza
-# un `solutionlang` fuera de `.c`/`.cpp` antes de llegar acá.  La plantilla `C`
-# llega en el ticket 14.
+# Los dos lenguajes, y por qué no son dos modelos: el grader de firma de DMOJ lo
+# aplican tanto el ejecutor de C como el de C++ (`is_signature_gradable`, en
+# `dmoj/executors/c_like_executor.py:165-172`), así que **C es una elección de
+# lenguaje, no un modelo aparte** -- se elige cambiando `solutionlang: .c`.  Por
+# eso la plantilla trae las dos soluciones modelo (`solution.c` y
+# `solution.cpp`, la misma solución en dos lenguajes) y por eso los dos límites
+# están declarados: el toolkit rechaza un `solutionlang` fuera de `.c`/`.cpp`
+# antes de llegar acá, porque ningún otro ejecutor tiene el mecanismo.
+#
+# `.cpp` y no `.c` como valor por defecto: es el lenguaje que el enunciado
+# muestra en su interfaz de ejemplo y el que usa el conjunto de envíos
+# declarados, así que es el que un lector espera encontrar.  Va explícito acá
+# en vez de deducirse del listado de archivos -- con dos soluciones presentes,
+# "el primero que aparece" no diría nada.
 #
 # La escalera sólo significa algo si el `tl` separa a la lineal (Manacher) de la
 # cuadrática sobre los casos de N = 10^5.  Si cambiás el `tl`, los puntajes
 # esperados de submissions.yml dejan de valer: corré `problemsetting verify` y
 # anotá lo observado en vez de razonarlo.
 limits:
+  .c:
+    tl: 1.0
+    ml: 262144
   .cpp:
     tl: 1.0
     ml: 262144

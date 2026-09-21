@@ -18,28 +18,43 @@
 // práctica para el autor: **este archivo no puede depender de la solución**.  Si
 // el evaluador imprimiera, por ejemplo, el resultado de un cálculo propio, el
 // problema dejaría de evaluar lo que el enunciado pide.
+//
+// ── Por qué su contenido se queda en el subconjunto común de C y C++ ────────
+//
+// El nombre del archivo dice `.cpp`, pero eso no decide cómo se compila: el juez
+// lo reescribe como `<problema><ext>.<ext>` -- `sigc.c` para el ejecutor `C11`,
+// `sigcpp.cpp` para `CPP17` (`CLikeExecutor.create_files`, y el toolkit reproduce
+// exactamente esos nombres en `outputs.signature_layout`) -- y **el compilador
+// despacha por ese sufijo**.  O sea: con `solutionlang: .c` este archivo se
+// compila como C, y con `.cpp` como C++.
+//
+// Por eso usa `scanf`/`printf` de `<stdio.h>` y un arreglo estático, y no
+// `std::cin`/`std::string`: es el mismo código válido en los dos lenguajes, que es
+// la condición para que la misma plantilla sirva a las dos variantes sin
+// duplicar el evaluador.  (Ver el bloque "Por qué la interfaz está escrita en C"
+// de `signature.hpp`.)
 
 #include "signature.hpp"
 
-#include <iostream>
-#include <string>
+#include <stdio.h>
 
-int main() {
+// N_MAX del enunciado (10^5) más el terminador.  `%100000s` le dice a `scanf`
+// que nunca escriba más de eso, así que el tamaño del arreglo y el ancho del
+// formato tienen que moverse juntos si cambia el límite del problema.
+static char cadena[100005];
+
+int main(void) {
     // Igual que un programa de concurso normal: entrada por stdin, salida por
     // stdout, y nada más.  No hay `freopen`: el toolkit (`problemsetting
     // outputs`) y el juez le pasan la entrada por stdin, y agregar un
     // `freopen(argv[1], ...)` haría que la corrida local y la del juez leyeran
     // archivos distintos.
-    std::ios::sync_with_stdio(false);
-    std::cin.tie(nullptr);
-
-    std::string s;
-    if (!(std::cin >> s)) {
+    if (scanf("%100000s", cadena) != 1) {
         return 1;  // input ausente o mal formado: mejor fallar ruidosamente
     }
 
     // Una llamada por caso.  El único resultado que el checker espera es esta
     // línea, así que no se imprime nada más.
-    std::cout << subpalindromo(s) << '\n';
+    printf("%d\n", subpalindromo(cadena));
     return 0;
 }

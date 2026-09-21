@@ -5,7 +5,7 @@
 // caso son ~5*10^9 comparaciones.  En C++ el caso de 5000 de ST3 tarda unos pocos
 // milisegundos, o sea que ST3 lo pasa con muchísimo margen: la cuadrática no
 // "casi no llega", llega.  El corte real es ST4 (N = 10^5), donde sólo entra una
-// solución lineal (Manacher, como en solution.cpp).
+// solución lineal (Manacher, como en solution.cpp y solution.c).
 //
 // Este envío es el sujeto de la comprobación 3 de `verify` ("un envío correcto
 // pero lento da TLE"): no falla por respuesta incorrecta -- sus casos chicos son
@@ -15,14 +15,18 @@
 // El puntaje esperado (70/100) sale de una corrida real de
 // `problemsetting verify`, no de razonarlo: la composición del corte del lote,
 // la omisión por dependencia y el tiempo agotado no se predicen a mano.
+//
+// La firma es la del header (`const char *`): es un envío **conforme**, distinto
+// en una sola dimensión de `firma-incorrecta.cpp`, que define la misma idea con
+// la firma equivocada.  Ver el comentario de ese archivo.
 
 #include "signature.hpp"
 
 #include <algorithm>
-#include <string>
+#include <cstring>
 
-int subpalindromo(const std::string& s) {
-    const int n = static_cast<int>(s.size());
+int subpalindromo(const char *s) {
+    const int n = static_cast<int>(std::strlen(s));
     int mejor = 0;
     for (int centro = 0; centro < n; ++centro) {
         // Palíndromo impar con centro en `centro`.

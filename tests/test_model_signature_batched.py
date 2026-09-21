@@ -71,10 +71,12 @@ def test_template_ships_the_whole_problem(template: Path) -> None:
         "generator.py",
         "signature.hpp",
         "evaluator.cpp",
+        "solution.c",
         "solution.cpp",
         "submissions.yml",
         "media/statement.md",
         "submissions/cuadratico.cpp",
+        "submissions/firma-incorrecta.c",
         "submissions/firma-incorrecta.cpp",
     ):
         assert (template / name).is_file(), name
@@ -86,7 +88,19 @@ def test_template_meta_yml_declares_the_signature_batched_model(template: Path) 
     assert resolved.uses_signature, "the template must resolve to the signature grader"
     assert resolved.is_batched, "and to the subtasks axis"
     assert not resolved.uses_checker
-    assert resolved.executor == "CPP17"
+    assert resolved.executor == "CPP17", "the declared solutionlang is the default"
+
+
+def test_the_meta_declares_limits_for_both_languages(template: Path) -> None:
+    """C is a language choice, so its limits must be declared, not inherited.
+
+    Limits come from ``limits[<the submission's own extension>]``: an entry in
+    ``.c`` graded against the 2 s default while the ``.cpp`` entries get 1 s would
+    grade the same algorithm under two different limits.
+    """
+    _, resolved = meta_mod.load(template)
+    assert resolved.limits[".c"] == meta_mod.Limits(1.0, 262144)
+    assert resolved.limits[".cpp"] == meta_mod.Limits(1.0, 262144)
 
 
 def test_template_meta_yml_header_matches_meta_HEADER(template: Path) -> None:
@@ -108,8 +122,26 @@ def test_the_header_declares_the_function_without_defining_main(template: Path) 
     against.
     """
     header = (template / "signature.hpp").read_text(encoding="utf-8")
-    assert f"int {FUNCTION}(const std::string&" in header
+    assert f"int {FUNCTION}(const char *s);" in header
     assert "main" not in _code(header), "the header must not define or declare main"
+
+
+def test_the_header_is_usable_from_c_and_cpp(template: Path) -> None:
+    """The model accepts both languages, and the header is what makes that possible.
+
+    Each half is load-bearing: no ``std::`` in the declaration, because the
+    evaluator is compiled as C when the executor is ``C11`` (its file name says
+    ``.cpp``, but ``CLikeExecutor`` renames it ``<problem>c.c`` and the compiler
+    dispatches on that suffix) and a ``std::string`` would make the C variant
+    impossible; and the ``extern "C"`` guards, because without them a definition
+    written in C would get a different symbol than a call site in a C++-compiled
+    evaluator.
+    """
+    header = (template / "signature.hpp").read_text(encoding="utf-8")
+    assert "std::" not in _code(header)
+    assert 'extern "C"' in _code(header)
+    # The guards must actually wrap the declaration, not merely appear.
+    assert _code(header).index(f"int {FUNCTION}(") > _code(header).index('extern "C" {')
 
 
 def test_the_header_has_an_include_guard(template: Path) -> None:
@@ -120,21 +152,41 @@ def test_the_header_has_an_include_guard(template: Path) -> None:
 
 def test_the_evaluator_is_the_program_that_calls_the_function(template: Path) -> None:
     """``evaluator.cpp`` owns ``main`` and the I/O; the submission owns the answer."""
-    entry = (template / "evaluator.cpp").read_text(encoding="utf-8")
-    assert "int main(" in _code(entry), entry
-    assert f"{FUNCTION}(" in _code(entry)
-    assert "std::cin" in entry and "std::cout" in entry
+    entry = _code((template / "evaluator.cpp").read_text(encoding="utf-8"))
+    assert "int main(" in entry, entry
+    assert f"{FUNCTION}(" in entry
+    assert "scanf" in entry and "printf" in entry
 
 
-def test_the_model_solution_is_a_function_not_a_program(template: Path) -> None:
-    """The model solution obeys the same contract a contestant does -- no ``main``.
+def test_the_evaluator_stays_in_the_common_subset_of_c_and_cpp(template: Path) -> None:
+    """It is compiled as C when the executor is ``C11``, so it cannot be C++-only."""
+    entry = _code((template / "evaluator.cpp").read_text(encoding="utf-8"))
+    for cxx_only in ("std::", "#include <iostream>", "string", "vector"):
+        assert cxx_only not in entry, cxx_only
+
+
+def test_the_model_solutions_are_functions_not_programs(template: Path) -> None:
+    """Both solutions obey the same contract a contestant does -- no ``main``.
 
     A model solution with its own ``main`` would prove nothing about the interface
     the problem publishes, and (composed naively) would not even link.
     """
-    solution = (template / "solution.cpp").read_text(encoding="utf-8")
-    assert f"int {FUNCTION}(const std::string& s)" in solution
-    assert "int main(" not in _code(solution), "the model solution must not define main"
+    for name in ("solution.cpp", "solution.c"):
+        source = _code((template / name).read_text(encoding="utf-8"))
+        assert f"int {FUNCTION}(const char *s)" in source, name
+        assert "int main(" not in source, name
+
+
+def test_the_two_model_solutions_are_the_same_solution(template: Path) -> None:
+    """C and C++ are a language choice, not two problems -- so the same algorithm.
+
+    The composed programs are compared on their *outputs* elsewhere; this checks
+    the shared structure, so a change to one cannot quietly leave the other behind.
+    """
+    cpp = _code((template / "solution.cpp").read_text(encoding="utf-8"))
+    c = _code((template / "solution.c").read_text(encoding="utf-8"))
+    for marker in ("radio", "centro", "borde"):
+        assert marker in cpp and marker in c, marker
 
 
 def _code(source: str) -> str:
@@ -231,48 +283,69 @@ def test_gen_small_returns_small_cases(generator_module) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _cxx() -> str:
-    compiler = shutil.which("g++")
+def _tool(name: str) -> str:
+    compiler = shutil.which(name)
     if compiler is None:
-        pytest.skip("g++ is not on PATH")
+        pytest.skip(f"{name} is not on PATH")
     return compiler
 
 
-def _compose(problem_id: str, source: Path, header: Path, entry: Path, destination: Path) -> list[str]:
+def _compose(
+    problem_id: str,
+    source: Path,
+    header: Path,
+    entry: Path,
+    destination: Path,
+    extension: str = ".cpp",
+) -> list[str]:
     """Stage the three translation units exactly as ``outputs`` (and the judge) do.
 
     Reusing the toolkit's own staging is the point: the test then proves the
-    *template* composes, not that a test-local imitation of the judge does.
+    *template* composes, not that a test-local imitation of the judge does.  The
+    extension decides the language of all three units, which is how the C variant
+    is exercised at all -- ``outputs`` derives the staged names from it.
     """
-    layout = outputs_mod.signature_layout(problem_id, ".cpp", entry.name, header.name)
+    layout = outputs_mod.signature_layout(problem_id, extension, entry.name, header.name)
     outputs_mod._stage_signature(source, header, entry, False, layout, destination)
     return [str(destination / name) for name in layout.names]
 
 
-def _compile(sources: list[str], output: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_cxx(), "-Wall", *sources, "-DONLINE_JUDGE", "-DSIGNATURE_GRADER", "-O2", "-lm",
-         "-std=c++17", "-o", str(output)],
-        capture_output=True,
-        text=True,
-    )
+def _compile(
+    sources: list[str], output: Path, extension: str = ".cpp"
+) -> subprocess.CompletedProcess:
+    if extension == ".c":
+        argv = [_tool("gcc"), "-Wall", *sources, "-DONLINE_JUDGE", "-DSIGNATURE_GRADER",
+                "-O2", "-lm", "-std=c11", "-o", str(output)]
+    else:
+        argv = [_tool("g++"), "-Wall", *sources, "-DONLINE_JUDGE", "-DSIGNATURE_GRADER",
+                "-O2", "-lm", "-std=c++17", "-o", str(output)]
+    return subprocess.run(argv, capture_output=True, text=True)
 
 
-def test_the_model_solution_composes_and_compiles(template: Path, tmp_path: Path) -> None:
+@pytest.mark.parametrize("extension", [".cpp", ".c"])
+def test_the_model_solution_composes_and_compiles(
+    template: Path, tmp_path: Path, extension: str
+) -> None:
     """The shipped solution compiles against the shipped header and evaluator.
 
     This is the contract failing loudly at author time rather than at grading time:
     if the solution's signature drifts from the header's, the toolkit's own
     ``outputs`` step produces a build error instead of expected outputs.
+
+    Both languages are run because the model offers both.  The C pass is the one
+    that proves the *evaluator* works when it is the file ``gcc`` compiles -- which
+    is the part of "C is a language choice" that a C++-only test would leave
+    unverified.
     """
     sources = _compose(
-        "sigdemo",
-        template / "solution.cpp",
+        f"sig{extension.lstrip('.')}",
+        template / f"solution{extension}",
         template / "signature.hpp",
         template / "evaluator.cpp",
         tmp_path / "staged",
+        extension,
     )
-    result = _compile(sources, tmp_path / "solution")
+    result = _compile(sources, tmp_path / "solution", extension)
     assert result.returncode == 0, result.stderr
 
 
@@ -336,8 +409,9 @@ def test_a_stray_main_in_a_conforming_submission_is_renamed_away(
     assert "main" in naive.stderr
 
 
+@pytest.mark.parametrize("extension", [".cpp", ".c"])
 def test_the_composed_solution_answers_by_the_statements_definition(
-    template: Path, tmp_path: Path
+    template: Path, tmp_path: Path, extension: str
 ) -> None:
     """End to end: the composed program's output is the answer the statement asks for.
 
@@ -345,14 +419,15 @@ def test_the_composed_solution_answers_by_the_statements_definition(
     palindrome -- so this is not the model solution compared against itself.
     """
     sources = _compose(
-        "sigdemo",
-        template / "solution.cpp",
+        f"sig{extension.lstrip('.')}",
+        template / f"solution{extension}",
         template / "signature.hpp",
         template / "evaluator.cpp",
         tmp_path / "staged",
+        extension,
     )
     binary = tmp_path / "solution"
-    result = _compile(sources, binary)
+    result = _compile(sources, binary, extension)
     assert result.returncode == 0, result.stderr
 
     rand = random.Random(20240920)
@@ -364,30 +439,62 @@ def test_the_composed_solution_answers_by_the_statements_definition(
         assert got.strip() == str(_longest_palindrome(s)), f"{s!r}: got {got.strip()}"
 
 
+def test_the_two_languages_produce_the_same_answers(template: Path, tmp_path: Path) -> None:
+    """The same problem in two languages, so the same answer must come out.
+
+    Both compositions are run over the same inputs and compared to each other --
+    which is the property the toolkit relies on when it composes ``.out`` files
+    from whichever solution ``solutionlang`` names.
+    """
+    answers = {}
+    for extension in (".cpp", ".c"):
+        sources = _compose(
+            f"sig{extension.lstrip('.')}",
+            template / f"solution{extension}",
+            template / "signature.hpp",
+            template / "evaluator.cpp",
+            tmp_path / f"staged{extension.lstrip('.')}",
+            extension,
+        )
+        binary = tmp_path / f"solution{extension.lstrip('.')}"
+        result = _compile(sources, binary, extension)
+        assert result.returncode == 0, result.stderr
+        answers[extension] = [
+            subprocess.run(
+                [str(binary)], input=s + "\n", capture_output=True, text=True, check=True
+            ).stdout
+            for s in ("a", "ababa", "aabb", "a" * 100 + "b" + "a" * 100, "ab" * 300)
+        ]
+    assert answers[".c"] == answers[".cpp"]
+
+
+@pytest.mark.parametrize(
+    ("name", "extension"),
+    [("firma-incorrecta.cpp", ".cpp"), ("firma-incorrecta.c", ".c")],
+)
 def test_a_submission_that_violates_the_header_contract_does_not_compile(
-    template: Path, tmp_path: Path
+    template: Path, tmp_path: Path, name: str, extension: str
 ) -> None:
     """The declared ``verdict: CE`` is a property of the interface, not of a run.
 
-    ``firma-incorrecta.cpp`` defines ``subpalindromo`` with the right name and the
-    right algorithm but takes its argument by value, so it never defines the
-    function the evaluator calls.  Composed the way the judge composes it, the
-    translation unit has a declaration with no definition and ``g++`` refuses --
-    which is what ``signature.py`` reports as a compile error.
+    Each file gets the error wrong in a different place -- the C++ one takes its
+    argument by value, the C one returns the wrong type -- so between them they
+    show the check is on the signature, not on one hand-picked mistake.
     """
     sources = _compose(
-        "sigdemo",
-        template / "submissions" / "firma-incorrecta.cpp",
+        f"sig{extension.lstrip('.')}",
+        template / "submissions" / name,
         template / "signature.hpp",
         template / "evaluator.cpp",
         tmp_path / "staged",
+        extension,
     )
-    result = _compile(sources, tmp_path / "violating")
+    result = _compile(sources, tmp_path / "violating", extension)
     assert result.returncode != 0, "a mismatched signature must not compile"
     assert FUNCTION in result.stderr
 
 
-def test_the_declared_ce_submission_is_the_only_one_with_a_wrong_signature(
+def test_the_declared_ce_submissions_are_the_only_ones_with_a_wrong_signature(
     template: Path,
 ) -> None:
     """The contrast that makes the CE meaningful.
@@ -397,10 +504,21 @@ def test_the_declared_ce_submission_is_the_only_one_with_a_wrong_signature(
     dimension each, which is why the manifest can declare TLE for one and CE for
     the other.
     """
-    conforming = (template / "submissions" / "cuadratico.cpp").read_text(encoding="utf-8")
-    violating = (template / "submissions" / "firma-incorrecta.cpp").read_text(encoding="utf-8")
-    assert f"int {FUNCTION}(const std::string& s)" in conforming
-    assert f"int {FUNCTION}(std::string s)" in violating
+    conforming = _code((template / "submissions" / "cuadratico.cpp").read_text(encoding="utf-8"))
+    violating_cpp = _code(
+        (template / "submissions" / "firma-incorrecta.cpp").read_text(encoding="utf-8")
+    )
+    violating_c = _code(
+        (template / "submissions" / "firma-incorrecta.c").read_text(encoding="utf-8")
+    )
+    assert f"int {FUNCTION}(const char *s)" in conforming
+    assert f"int {FUNCTION}(std::string s)" in violating_cpp
+    assert f"long long {FUNCTION}(const char *s)" in violating_c
+    # The conforming C++ submission takes `const char *`, so this is the same
+    # interface in both languages and not a C++-only declaration.
+    assert f"int {FUNCTION}(const char *s)" in _code(
+        (template / "solution.c").read_text(encoding="utf-8")
+    )
 
 
 def test_no_test_run_writes_into_the_template() -> None:
@@ -423,6 +541,7 @@ def test_no_test_run_writes_into_the_template() -> None:
             "media",
             "meta.yml",
             "signature.hpp",
+            "solution.c",
             "solution.cpp",
             "submissions",
             "submissions.yml",

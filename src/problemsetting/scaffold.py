@@ -80,17 +80,45 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _declared_solutionlang(model: str, shipped: tuple[str, ...]) -> str:
+    """The solution extension the template's own ``meta.yml`` declares.
+
+    Read leniently on purpose -- this only picks a *default*, and a scaffold must
+    not break because a template is terse or its file is unreadable.  Anything
+    short of a usable declaration falls back to the template's only solution, and
+    a declaration the template does not actually ship is ignored rather than
+    written for: a default that names a file which does not exist is worse than
+    an arbitrary one that does.
+    """
+    path = templates.template_dir(model) / meta_mod.META_FILENAME
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return shipped[0]
+    declared = raw.get(meta_mod.SOLUTIONLANG_KEY) if isinstance(raw, dict) else None
+    if isinstance(declared, str) and declared in shipped:
+        return declared
+    return shipped[0]
+
+
 def pick_solutionlang(requested: str | None, model: str) -> str:
     """Choose the model solution's extension, defaulting to the template's own.
 
-    A template ships one model solution per language it demonstrates -- the
-    signature models ship both C and C++ -- so ``--solutionlang`` selects among
-    the template's solutions.  Asking for a language the model allows but the
-    template does not carry has no correct file to write, and says so.
+    "The template's own" is read from the template's ``meta.yml``, not guessed
+    from the file list: a template that ships more than one solution declares
+    which one it demonstrates (``signature-batched`` ships both ``.c`` and
+    ``.cpp`` and declares ``.cpp``), and the extension that *sorts* first is not
+    that statement.  A template that declares nothing falls back to its only
+    solution, which is the same answer for every single-solution template -- so
+    the declaration is a refinement, never a requirement.
+
+    ``--solutionlang`` then selects among the template's solutions.  Asking for a
+    language the model allows but the template does not carry has no correct file
+    to write, and says so.
     """
     shipped = templates.solution_extensions(model)
     if requested is None:
-        return shipped[0]
+        return _declared_solutionlang(model, shipped)
     if not requested.startswith("."):
         requested = "." + requested
     if requested not in meta_mod.EXECUTOR_BY_EXT:

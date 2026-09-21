@@ -18,9 +18,7 @@ A diferencia de un problema de entrada/salida, acá **no escribís un programa**
 escribís **una función**.  El juez te da este archivo de cabecera:
 
 ```cpp
-#include <string>
-
-int subpalindromo(const std::string& s);
+int subpalindromo(const char *s);
 ```
 
 y compila tu envío junto con un evaluador que hace la entrada y la salida.  Tu
@@ -28,9 +26,13 @@ envío tiene que **definir** `subpalindromo` con exactamente esa firma; el
 evaluador se encarga de leer ~s~ por entrada estándar y de imprimir el resultado.
 No escribas `main`: lo aporta el evaluador.
 
-El nombre y la firma de la función son la interfaz del problema.  Una definición
-que no coincida -- por ejemplo, una que reciba `std::string` por valor en vez de
-por referencia -- no compila, y el veredicto es ~CE~.
+La función se puede implementar en **C o en C++**, a elección: la declaración
+está escrita en el subconjunto común de los dos lenguajes -- `const char *` y
+`int` -- para que sirva a los dos.  En C++ el header envuelve la declaración en
+`extern "C"`, así que el símbolo es el mismo desde cualquiera de los dos.  Lo que
+**no** se puede cambiar es el nombre ni los tipos: son la interfaz del problema.
+Una definición que no coincida -- por ejemplo, una que reciba `std::string` por
+valor, o que devuelva `long long` -- no compila, y el veredicto es ~CE~.
 
 ### Formato de entrada
 

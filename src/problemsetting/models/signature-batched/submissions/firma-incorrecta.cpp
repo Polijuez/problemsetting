@@ -1,12 +1,14 @@
 // Envío que VIOLA el contrato del header -- el que demuestra que el problema
-// rechaza una interfaz que no coincide.
+// rechaza una interfaz que no coincide.  Variante en **C++**.
 //
 // El error es deliberado y es el más común de los que se cometen en un problema
 // de firma: la función se llama igual y calcula lo correcto, pero su firma no es
 // la declarada.  Acá toma `std::string` **por valor** donde `signature.hpp`
-// declara `const std::string&`.  Para C++ son dos funciones distintas: la
-// definición no es la declaración, así que la llamada de `evaluator.cpp` queda
-// apuntando a la declarada -- que nunca se define -- y la composición falla.
+// declara `const char *`.
+//
+// Para C++ son dos funciones distintas: la definición no es la declaración, así
+// que la llamada de `evaluator.cpp` queda apuntando a la declarada -- que nunca
+// se define -- y la composición falla al linkear.
 //
 // El juez compila los tres archivos (`<problema>_submission.cpp`,
 // `signature.hpp`, `<problema>cpp.cpp`) como una sola unidad de traducción, así
@@ -15,9 +17,13 @@
 // demuestra que el mecanismo de firma está en vigor: con un problema de E/S
 // normal, este mismo archivo compilaría y daría AC.
 //
-// (Si en cambio definiera `int subpalindromo(const std::string&)`, el envío sería
+// (Si en cambio definiera `int subpalindromo(const char *)`, el envío sería
 // correcto y sacaría 100.  La diferencia entre los dos es exactamente lo que el
 // header -- y sólo el header -- define.)
+//
+// El mismo error en C, con la firma cambiada de otra forma (el tipo de retorno),
+// está en `firma-incorrecta.c`: los dos dan CE, y por eso los dos están
+// declarados.
 
 #include "signature.hpp"
 
