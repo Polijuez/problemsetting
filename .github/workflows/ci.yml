@@ -1,0 +1,96 @@
+# The cheap half of the pipeline (decision Q29): everything that can be exercised
+# without building `localhost/dmoj/judge-tier3`, on every push.
+#
+# What runs here: scaffold each shipped model from its template, then `cases`,
+# `outputs` and `archive` for each; a structural check of every emitted
+# `init.yml`; and the full test suite.  The 8 templates are the toolkit's
+# integration test, so a broken template breaks the build.
+#
+# What deliberately does NOT run here: `verify` and `stress`, and the judge image
+# they need.  Those grade submissions in a real `judge-tier3` container -- a
+# multi-GB image build -- so they are exercised locally / on demand, never per
+# push.  No scheduled full-judge job exists by design.
+#
+# No secrets, no SSH keys, no deployment host paths: this job installs its tools
+# and builds problems, nothing else.  (Deploy is out of scope entirely, decision
+# Q4; the sibling repos' `deploy.yml` files are not a model to copy -- the one in
+# `problemashaskell` deploys a different repo's problem set.)
+name: CI
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  cheap:
+    name: templates, tests and init.yml
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # `tests/test_ci_contract.py` owns the model -> problem-name table and the
+      # structural validator, so CI and a local `pytest` run cannot disagree.
+      PYTHONPATH: ${{ github.workspace }}/tests
+    steps:
+      - uses: actions/checkout@v4
+
+      # `uv` drives the project (pyproject.toml, requires-python >=3.13); the
+      # interpreter comes from .python-version, so pin nothing here.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install the toolkit
+        run: uv sync --locked
+
+      # Scaffold every model and build it end to end, through the installed
+      # console script -- the same entry point users run.  The model list comes
+      # from the installed package and the names from the contract test, so a
+      # newly added model cannot be silently skipped here.
+      - name: Scaffold and build every model
+        run: |
+          set -euo pipefail
+          uv run python -c 'from test_ci_contract import CI_PROBLEM_NAMES as n; from problemsetting import meta; assert sorted(n) == sorted(meta.MODELS), "a model has no CI problem name"; print("\n".join(f"{m} {n[m]}" for m in sorted(meta.MODELS)))' > models.txt
+          mkdir -p build-work
+          cd build-work
+          while read -r model name; do
+            echo "==> ${model} (${name})"
+            uv run --project .. problemsetting new --model "${model}" "${name}"
+            uv run --project .. problemsetting cases "${name}"
+            uv run --project .. problemsetting outputs "${name}"
+            uv run --project .. problemsetting archive "${name}"
+          done < ../models.txt
+
+      # Structural validation -- NOT authoritative.  The judge's own loader cannot
+      # be imported on this host: `dmoj/problem.py` imports MemoryIO from
+      # `dmoj.cptbox.utils`, which imports the compiled `_cptbox` C++ extension,
+      # and that exists only inside the judge image this job does not build.  Real
+      # loading happens there; here we re-state, from the document alone, the
+      # rules DMOJ decides at load time (batch numbering, non-empty batches,
+      # `dependencies` positive and earlier, no nested batches).
+      - name: Validate every init.yml structurally
+        run: |
+          set -euo pipefail
+          uv run python - <<'PY'
+          import sys
+          from pathlib import Path
+          from test_ci_contract import load_init, validate_init
+          from problemsetting import meta
+          paths = sorted(Path("build-work").glob("*/init.yml"))
+          assert len(paths) == len(meta.MODELS), (
+              f"expected {len(meta.MODELS)} built problems, found {len(paths)}"
+          )
+          failures = [
+              message
+              for path in paths
+              for message in validate_init(load_init(path.parent), str(path))
+          ]
+          for message in failures:
+              print(f"::error::{message}")
+          if failures:
+              sys.exit(1)
+          print(f"{len(paths)} init.yml file(s) pass the structural checks")
+          PY
+
+      - name: Run the test suite
+        run: uv run pytest tests/ -q
