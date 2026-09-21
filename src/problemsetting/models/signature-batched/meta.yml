@@ -1,0 +1,35 @@
+# meta.yml -- intención de autoría del problema.  Es el único archivo de
+# configuración que se edita a mano: init.yml se genera a partir de este.
+#
+#   model:        preset del problema, uno de los 8 modelos del toolkit.
+#   solutionlang: extensión de la solución modelo (.c, .cpp, .hs, .java, .py
+#                 y .txt en los modelos output-only).
+#   limits:       límites por lenguaje, valores absolutos: tl en segundos y
+#                 ml en KiB (la unidad de DMOJ).  Los lenguajes que no
+#                 aparezcan usan 2 s / 262144 KiB.
+#   grader, checker, batch, io, submission, executor:
+#                 overrides opcionales de los ejes del preset.
+#
+# Los ejes expandidos no se escriben acá: `model:` más los overrides son la
+# fuente de verdad y el toolkit los resuelve en cada corrida.
+model: signature-batched
+solutionlang: .cpp
+# `signature-batched` es el modelo `batched` con el grader de firma: el mismo
+# enunciado, la misma escalera de subtareas y los mismos límites.  Lo único que
+# cambia es *qué* escribe el concursante -- una función contra `signature.hpp`
+# en vez de un programa entero -- y eso no toca los límites.
+#
+# Sólo `.cpp`: el grader de firma de DMOJ existe únicamente para C y C++ (lo
+# aplica `is_signature_gradable`, que sólo está en esos dos ejecutores), así que
+# un límite para otro lenguaje sería configuración muerta -- el toolkit rechaza
+# un `solutionlang` fuera de `.c`/`.cpp` antes de llegar acá.  La plantilla `C`
+# llega en el ticket 14.
+#
+# La escalera sólo significa algo si el `tl` separa a la lineal (Manacher) de la
+# cuadrática sobre los casos de N = 10^5.  Si cambiás el `tl`, los puntajes
+# esperados de submissions.yml dejan de valer: corré `problemsetting verify` y
+# anotá lo observado en vez de razonarlo.
+limits:
+  .cpp:
+    tl: 1.0
+    ml: 262144

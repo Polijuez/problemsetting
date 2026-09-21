@@ -1,0 +1,125 @@
+# submissions.yml -- envíos declarados del problema, con el resultado que se
+# espera de cada uno.
+#
+# Es el archivo que consume `problemsetting verify`: cada envío declara acá qué
+# veredicto y qué puntaje tiene que obtener, así que un envío no puede
+# desincronizarse en silencio -- si la realidad no coincide con la expectativa
+# declarada, `verify` falla.
+#
+# Campos:
+#   source   Ruta al archivo de la submission, relativa al directorio del
+#            problema.  Obligatorio.
+#   verdict  Veredicto DMOJ esperado: AC, WA, TLE, MLE, OLE, RTE, IR, SC o CE.
+#            Opcional.
+#   score    Puntaje esperado, como porcentaje del total del problema (0 a 100).
+#            Opcional.
+#   role     Para qué sirve el envío dentro del toolkit.  Informativo para
+#            `verify`; los tickets posteriores leen este campo en vez de volver a
+#            declarar el envío:
+#              model         la solución modelo (la que produce los `.out`).
+#              brute         la fuerza bruta de referencia, que el stress test
+#                            compara contra la solución modelo sobre casos
+#                            diminutos.
+#              checker-test  salida deliberadamente malformada, para comprobar
+#                            que el checker la rechaza en vez de romperse.
+#            Opcional.
+#   executor Ejecutor DMOJ con el que se corre este envío, cuando no se quiere
+#            inferir del sufijo del archivo (por ejemplo CPP20 para un `.cpp`).
+#            Opcional.
+#
+# Un envío sin `verdict` ni `score` es informativo: se corre y se reporta, pero no
+# puede hacer fallar a `verify`.
+#
+# ── Lo específico de un problema de firma ────────────────────────────────────
+#
+# En este modelo el envío **no es un programa**: es la definición de la función
+# que declara `signature.hpp`.  El juez le prefija `#include "signature.hpp"` y
+# `#define main main_<uuid>` y lo compila junto con `evaluator.cpp` como una sola
+# unidad de traducción (el mecanismo completo está comentado en `signature.hpp`).
+#
+# La consecuencia para este archivo es que hay una clase de envío que sólo existe
+# acá: el que **viola el contrato del header**.  `firma-incorrecta.cpp` define una
+# función con el nombre correcto y el algoritmo correcto, pero con la firma
+# equivocada, así que no implementa lo que `evaluator.cpp` llama.  El veredicto
+# observable es **CE** -- el juez no consigue compilar la composición -- y no WA:
+# el envío nunca llega a correr.  Es la comprobación de que el mecanismo de firma
+# está en vigor; con un problema de E/S normal, ese mismo archivo compilaría y
+# daría AC.
+#
+# Las expectativas de abajo salen de una corrida real de `problemsetting verify`.
+# En un problema con subtareas eso no es un detalle: DMOJ corta el lote apenas un
+# caso no lo pasa y omite por completo los lotes cuyos prerrequisitos no pasaron
+# (sus casos quedan en SC, sin ejecutarse), así que el puntaje que queda es una
+# composición del corte, de la omisión por dependencia y del tiempo agotado --
+# exactamente cómo se publican expectativas equivocadas.
+#
+# Este problema **no declara ningún `role: brute`**, y es a propósito, pero el
+# motivo no es "no hace falta": es que acá *no existe* un brute declarable.  La
+# comprobación 4 de `verify` exige que el envío con `role: brute` sea AC sobre
+# *todos* los casos declarados, y `problemsetting stress` exige lo mismo sobre
+# los casos diminutos que genera `gen_small`.  Un brute honesto para este
+# enunciado es cúbico, y los casos declarados llegan a 10^5 caracteres: cualquier
+# envío que pase la comprobación 4 no sería un brute.  Declararlo haría *fallar*
+# la comprobación 4, que es peor que omitirla.
+#
+# Consecuencia observable y prevista: `verify` omite la comprobación 4 y `stress`
+# termina con "no submission declares `role: brute`" y código de salida 0.
+# Ninguno de los dos es un fallo.  La comparación que los reemplaza está en
+# `tests/test_model_signature_batched.py`, que corre la solución modelo --
+# compuesta como la compone el juez -- contra un cálculo por definición sobre
+# muchas cadenas chicas al azar.
+
+submissions:
+  # La solución modelo (Manacher, O(|s|)) es la misma que produce los `.out`, así
+  # que se declara acá por ruta en vez de duplicarla en submissions/.
+  #
+  # Es también la prueba de que el contrato del header se puede cumplir: define
+  # exactamente la función declarada -- `const std::string&`, no una copia -- y
+  # por eso compila y saca 100.
+  - source: solution.cpp
+    verdict: AC
+    score: 100
+    role: model
+
+  # Correcta pero demasiado lenta: es el envío que ejercita la comprobación 3
+  # ("un envío correcto pero lento da TLE").  Es la misma idea cuadrática que
+  # `submissions/cuadratico.py` de la plantilla `batched`, pero en C++ -- así que
+  # dónde se corta la escalera es otra cosa, y se mide en vez de suponerse.
+  #
+  # La corrida real que fijó el puntaje de este envío (la escalera de C++ es más
+  # ancha que la de Python de la plantilla `batched`):
+  #
+  #   batch 1  20/20 pts  AC   (AC 10)
+  #   batch 2  25/25 pts  AC   (AC 16)
+  #   batch 3  25/25 pts  AC   (AC 22)
+  #   batch 4   0/30 pts  TLE  (AC 22, SC 5, TLE 1)
+  #
+  # O sea: en C++ la cuadrática pasa ST1, ST2 y ST3 enteras, y se cae sólo en el
+  # caso uniforme de 10^5 de ST4.  70/100 es eso, y no la composición de corte de
+  # la plantilla `batched`: un TLE que en Python ocurre ya en ST2 acá ocurre en
+  # ST4.  Es la razón por la que las expectativas de este archivo salen de una
+  # corrida real y no de copiar las de la otra plantilla.
+  #
+  # Consecuencia visible en ESTE problema: el mecanismo de `dependencies` -- que
+  # ST3 declare `[2]` y el juez omita sus casos si ST2 no se pasó completa -- no
+  # llega a dispararse con este envío, porque ST2 acá se pasa.  Sigue declarado en
+  # `generator.py` (y en la plantilla `batched` se ve en acción); acá se activa
+  # para cualquier envío que falle el lote 2, que es el caso que el mecanismo
+  # existe para cubrir.
+  - source: submissions/cuadratico.cpp
+    verdict: TLE
+    score: 70
+
+  # El envío que demuestra que el header es un contrato y no una sugerencia:
+  # mismo nombre de función y mismo algoritmo, firma distinta.  El juez no
+  # consigue compilar la composición y el veredicto es CE -- nunca corre.  Es el
+  # sujeto de la comprobación 2 de `verify` (un envío destinado a fallar recibe
+  # el veredicto que declara), y el único veredicto de este problema que no es
+  # AC ni TLE.
+  #
+  # No declara `score:` a propósito: un envío que el juez nunca llegó a correr no
+  # tiene puntaje que comparar, y `verify` trata cualquier `score` declarado sobre
+  # una corrida sin casos como un incumplimiento (incluso `score: 0`, que no es
+  # lo mismo que "no se corrió").  El veredicto `CE` es la afirmación entera.
+  - source: submissions/firma-incorrecta.cpp
+    verdict: CE
