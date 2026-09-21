@@ -1,0 +1,56 @@
+# meta.yml -- intención de autoría del problema.  Es el único archivo de
+# configuración que se edita a mano: init.yml se genera a partir de este.
+#
+#   model:        preset del problema, uno de los 8 modelos del toolkit.
+#   solutionlang: extensión de la solución modelo (.c, .cpp, .hs, .java, .py
+#                 y .txt en los modelos output-only).
+#   limits:       límites por lenguaje, valores absolutos: tl en segundos y
+#                 ml en KiB (la unidad de DMOJ).  Los lenguajes que no
+#                 aparezcan usan 2 s / 262144 KiB.
+#   grader, checker, batch, io, submission, executor:
+#                 overrides opcionales de los ejes del preset.
+#
+# Los ejes expandidos no se escriben acá: `model:` más los overrides son la
+# fuente de verdad y el toolkit los resuelve en cada corrida.
+model: batched-custom
+solutionlang: .cpp
+limits:
+  .cpp:
+    tl: 1.0
+    ml: 262144
+
+# Lo que este preset expande (no se escribe, se documenta):
+#
+#   grader: standard       (el grader normal de DMOJ)
+#   checker: custom        -> `checker: checker.py` en init.yml
+#   batch: subtasks        -> un `batched:` por subtarea, con sus puntos
+#   io: stdio
+#   submission: program
+#
+# Las dos piezas y su interacción:
+#
+#   * `checker: custom` no es `custom_judge:`.  `checker: checker.py` reemplaza
+#     **sólo la comparación**; el `StandardGrader` sigue manejando (lanza el
+#     proceso, mide tiempo y memoria, y después llama a `check()` para decidir
+#     veredicto y puntaje).  Es lo que usan `custom`, `batched-custom` y
+#     `output-only-custom`.  `custom_judge: f.py` reemplazaría el grader entero
+#     (`CustomGrader` carga `f.Grader`), que no es lo que este problema necesita.
+#
+#   * `batch: subtasks` hace que `init.yml` emita un `batched:` por subtarea, con
+#     su `points:` y sus `dependencies:`.  El juez trata cada lote como una
+#     unidad para el cortocircuito, pero llama al checker una vez por caso.
+#
+# La interacción, que es la razón de que este modelo exista aparte de `custom` y
+# de `batched`: el checker recibe `point_value = case.points`, y para un caso
+# dentro de un lote `case.points` es el `points:` del lote
+# (`dmoj/problem.py:234-238` propaga el lote a cada caso hijo).  O sea que
+# `0.7 * point_value` significa «0.7 de la subtarea de este caso», no «0.7 del
+# problema».  Un checker escrito suponiendo que `point_value` es el total puntúa
+# mal acá y sólo acá -- en `custom` las dos cosas coinciden porque hay un solo
+# lote, y en `batched` no hay checker que reciba un `point_value`.
+#
+# El puntaje parcial sale de `CheckerResult.points`, que puede ser fraccionario
+# (`dmoj/graders/standard.py:37-40` toma el veredicto de `check.passed` y el
+# puntaje de `check.points`).  No hace falta motor nuevo: hace falta esta
+# plantilla.  El límite de 1 s no separa complejidades acá -- todas las
+# soluciones del problema son O(n) -- así que no hay envío declarado por tiempo.

@@ -1,0 +1,116 @@
+# submissions.yml -- envíos declarados del problema, con el resultado que se
+# espera de cada uno.
+#
+# Es el archivo que consume `problemsetting verify`: en vez de confiar en una
+# convención de nombres (el toolkit viejo asumía que todo lo que estuviera en
+# submissions/ debía dar AC), cada envío declara acá qué veredicto y qué puntaje
+# tiene que obtener.
+#
+# Campos:
+#   source   Ruta al archivo de la submission, relativa al directorio del
+#            problema.  Obligatorio.
+#   verdict  Veredicto DMOJ esperado: AC, WA, TLE, MLE, OLE, RTE, IR, SC o CE.
+#            Opcional.
+#   score    Puntaje esperado, como porcentaje del total del problema (0 a 100).
+#            Opcional.
+#   role     Para qué sirve el envío dentro del toolkit (informativo para
+#            `verify`): model, brute o checker-test.  Opcional.
+#   executor Ejecutor DMOJ con el que se corre el envío cuando no se quiere
+#            inferir del sufijo.  Opcional.
+#
+# Un envío sin `verdict` ni `score` es informativo.
+#
+# SOBRE EL PUNTAJE PARCIAL DE ESTE PROBLEMA -- leer antes de tocar los números
+# ---------------------------------------------------------------------------
+#
+# Los dos envíos parciales acreditan **fracciones de lotes distintos**, y ese es
+# el contenido del modelo.  El cálculo no es «0.7 del problema»:
+#
+#   * el checker corre una vez por caso y devuelve `0.7 * point_value`, donde
+#     `point_value` es el `points:` del LOTE de ese caso (10, 20, 30 o 40);
+#   * `verify` puntúa un lote fraccionario como `sum(points) / sum(totals)`, así
+#     que un lote cuyos casos corrieron todos y sacaron 0.7 rinde exactamente el
+#     70% de ese lote;
+#   * un caso que el checker *rechaza* da WA, y el juez corta el lote: los casos
+#     siguientes no corren y quedan en `SC`.  Un lote así rinde 0, y no importa
+#     cuántos casos hubieran salido bien si el que falla está primero.
+#
+# Los puntajes de abajo salen de una corrida real de `problemsetting verify`, no
+# de razonarlos.  En un problema con esta combinación eso no es una formalidad:
+# el resultado depende de en qué subtarea cae el primer caso que falla, de si el
+# lote queda omitido por dependencia y de si el checker devolvió una fracción o
+# un rechazo -- tres cosas que interactúan y que una predicción a mano erra.
+#
+# Este problema **no declara ningún `role: brute`**, y es a propósito: el
+# enunciado es de optimización (usar la menor cantidad de faros), así que una
+# fuerza bruta honesta tendría que probar subconjuntos -- exponencial, y no corre
+# ni con las rondas chicas de `gen_small`.  La comprobación 4 de `verify` exige
+# que el envío con `role: brute` sea AC sobre *todos* los casos declarados, y
+# ninguno lo es: el único envío que resuelve todo es la solución modelo, que no
+# es una fuerza bruta.  Declararlo con ese rol haría *fallar* la comprobación 4,
+# que es peor que omitirla.  Consecuencia observable y prevista: `verify` omite
+# la comprobación 4 y `stress` termina con "no submission declares `role: brute`"
+# y código de salida 0.  Ninguno de los dos es un fallo; ambos dicen por qué no
+# corrieron.
+
+submissions:
+  # La solución modelo (O(n), `ceil(n/5)` faros) es la misma que produce los
+  # `.out`, así que se declara acá por ruta en vez de duplicarla en
+  # submissions/.  Su puntaje completo es también la evidencia de que el checker
+  # no castiga una construcción distinta de la del modelo.
+  - source: solution.cpp
+    verdict: AC
+    score: 100
+    role: model
+
+  # Correcto y subóptimo, pero sólo en las rondas chicas: con n <= 50 ilumina la
+  # ronda con un faro de más (banda parcial), y con n > 50 directamente no la
+  # ilumina (rechazo).  El único lote que acredita es la Subtarea 1, y sus casos
+  # valen 10 puntos cada uno: `0.7 * 10 = 7`.
+  #
+  # Los lotes 2, 3 y 4 rinden 0.  El 2 corta en su primer caso (la ronda de 2000,
+  # que este envío no puede iluminar); el 3 no corre siquiera -- depende del lote
+  # 2 y, como ese no se pasó, sus casos quedan en `SC` sin ejecutarse; y el 4
+  # corre su primer caso (la ronda de 200000), lo falla, y se corta.
+  #
+  # La fila del lote 3 es la que ejercita `dependencies`: como ST2 no se pasó
+  # completa, el juez omite sus casos con `SC` en vez de correrlos y fallarlos.
+  # Es observable y distinto de WA.
+  - source: submissions/solo-chicos.cpp
+    verdict: WA
+    score: 7
+
+  # Correcto y subóptimo en las rondas medianas, inválido en las grandes: es el
+  # envío que falla una subtarea concreta.  Acredita 0.7 de las Subtareas 1 y 2
+  # (`0.7 * 10 = 7` y `0.7 * 20 = 14`) y 0 de las 3 y 4, donde su primer caso no
+  # ilumina la ronda.
+  #
+  # Detalle que no es obvio y que este envío demuestra: **una subtarea que
+  # acredita puntaje parcial cuenta como aprobada para `dependencies`.**  El
+  # checker devuelve `CheckerResult(True, 0.7 * point_value)`, o sea AC con
+  # fracción, así que el lote queda en `passed_batches`
+  # (`dmoj/judge.py:541-543`; el cortocircuito se levanta sólo ante un flag de
+  # WA).  Por eso la Subtarea 3 *sí* se ejecuta y falla por su propio caso (WA),
+  # a diferencia de `solo-chicos.cpp`, donde ST3 queda omitida (SC).  Los dos
+  # envíos tienen un lote incompleto y la diferencia entre «omitida» y
+  # «fallada» es exactamente el puntaje de la subtarea anterior.
+  - source: submissions/hasta-2000.cpp
+    verdict: WA
+    score: 21
+
+  # Un faro suelto: formato correcto, objeto inválido.  El checker lo valida y
+  # devuelve `CheckerResult(False, 0)`, así que **todos** los lotes fallan en su
+  # primer caso y el veredicto de la corrida es WA con 0.  Es el sujeto de la
+  # comprobación 2 de `verify`.
+  - source: submissions/invalido.cpp
+    verdict: WA
+    score: 0
+
+  # Salida malformada: texto donde el formato pide números.  Es el sujeto de la
+  # comprobación 5.  El checker la rechaza en su rama barata y determinista
+  # (la primera línea no es un entero); un checker que se rompiera con basura
+  # daría error interno y `verify` lo reportaría como problema roto.
+  - source: submissions/malformado.cpp
+    verdict: WA
+    score: 0
+    role: checker-test
