@@ -1,0 +1,73 @@
+# submissions.yml -- envíos declarados del problema, con el resultado que se
+# espera de cada uno.
+#
+# Es el archivo que consume `problemsetting verify`: en vez de confiar en una
+# convención de nombres (el toolkit viejo asumía que todo lo que estuviera en
+# submissions/ debía dar AC), cada envío declara acá qué veredicto y qué puntaje
+# tiene que obtener.  Así un envío no puede desincronizarse en silencio: si la
+# realidad no coincide con la expectativa declarada, `verify` falla.
+#
+# Campos:
+#   source   Ruta al archivo de la submission, relativa al directorio del
+#            problema.  Obligatorio.
+#   verdict  Veredicto DMOJ esperado: AC, WA, TLE, MLE, OLE, RTE, IR, SC o CE.
+#            Opcional.
+#   score    Puntaje esperado, como porcentaje del total del problema (0 a 100).
+#            Opcional.
+#   role     Para qué sirve el envío dentro del toolkit.  Informativo para
+#            `verify`; los tickets posteriores leen este campo en vez de volver a
+#            declarar el envío:
+#              model         la solución modelo (la que produce los `.out`).
+#              brute         la fuerza bruta de referencia, que el stress test
+#                            compara contra la solución modelo sobre casos
+#                            diminutos.
+#              checker-test  salida deliberadamente malformada, para comprobar
+#                            que el checker la rechaza en vez de romperse.
+#            Opcional.
+#   executor Ejecutor DMOJ con el que se corre este envío, cuando no se quiere
+#            inferir del sufijo del archivo (por ejemplo PYPY3 para un `.py`, o
+#            CPP20 para un `.cpp`).  Opcional.
+#
+# Un envío sin `verdict` ni `score` es informativo: se corre y se reporta, pero no
+# puede hacer fallar a `verify`.
+#
+# Los límites salen de `meta.yml`: el lenguaje del envío se infiere de su sufijo
+# (con `executor` como override) y se usan el `tl` y el `ml` declarados para ese
+# lenguaje.  Un lenguaje sin entrada en `limits:` usa 2 s / 262144 KiB.
+#
+# En este modelo **todos los envíos son `.txt`**: el sufijo se mapea al ejecutor
+# `TEXT` (que es `cat`), no a un lenguaje de programación.  No hay compilación y
+# no hay `role: brute`: la fuerza bruta de `stress` es un programa, y acá no hay
+# ninguna submission que lo sea.  Por eso `verify` va a reportar las comprobacio-
+# nes 3 (`TLE`), 4 (fuerza bruta) y 5 (checker) como *skipped con el motivo*, que
+# es la respuesta correcta: este problema no tiene nada con qué ejercitarlas.
+#
+# Las expectativas de puntaje de este archivo salen de una corrida real, no de
+# razonarlas: DMOJ corta el resto del lote apenas un caso falla, y predecir a mano
+# qué puntaje deja eso es exactamente cómo se publican expectativas equivocadas.
+
+submissions:
+  # La solución modelo es el propio `solution.txt`, que es también lo que
+  # `problemsetting outputs` copia a `cases/{i}.out`.  Declararla acá por ruta en
+  # vez de duplicarla en submissions/ es lo que garantiza que los `.out` y el
+  # envío que dice ser correcto no puedan divergir.
+  #
+  # `TEXT` corre `cat` sobre este archivo y el `StandardGrader` compara la salida
+  # con el `out:` del caso: 46875 contra 46875, AC, 100/100.
+  - source: solution.txt
+    verdict: AC
+    score: 100
+    role: model
+
+  # Un número con la forma correcta y el valor equivocado: cinco dígitos, y
+  # distinto de 46875.  Falla el único caso y el problema es todo o nada, así que
+  # saca 0.
+  #
+  # Vale la pena notar *por qué* es un buen envío incorrecto: un `.txt` que
+  # hubiera intentado adivinar el dígito final, o que hubiera cortado la
+  # recurrencia antes (F(10^12 - 1) mód 10^5 = 90626), saca exactamente el mismo
+  # 0.  En este modelo no hay puntaje parcial que premie acercarse: la respuesta
+  # está o no está.
+  - source: submissions/incorrecto.txt
+    verdict: WA
+    score: 0

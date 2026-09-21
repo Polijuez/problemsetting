@@ -1,0 +1,20 @@
+# meta.yml -- intención de autoría del problema.  Es el único archivo de
+# configuración que se edita a mano: init.yml se genera a partir de este.
+#
+#   model:        preset del problema, uno de los 8 modelos del toolkit.
+#   solutionlang: extensión de la solución modelo (.c, .cpp, .hs, .java, .py
+#                 y .txt en los modelos output-only).
+#   limits:       límites por lenguaje, valores absolutos: tl en segundos y
+#                 ml en KiB (la unidad de DMOJ).  Los lenguajes que no
+#                 aparezcan usan 2 s / 262144 KiB.
+#   grader, checker, batch, io, submission, executor:
+#                 overrides opcionales de los ejes del preset.
+#
+# Los ejes expandidos no se escriben acá: `model:` más los overrides son la
+# fuente de verdad y el toolkit los resuelve en cada corrida.
+model: output-only
+solutionlang: .txt
+limits:
+  .txt:
+    tl: 1.0
+    ml: 65536
