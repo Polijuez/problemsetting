@@ -12,8 +12,8 @@ What is asserted here, and why it is this model's contract rather than
 ``batched-custom``'s repeated:
 
 * the header declares a function that takes an output array -- the interface
-  carries a *memory* obligation (write at most ``n`` positions) that the firm of
-  the type alone cannot express, so it is checked, not assumed;
+  carries a *memory* obligation (write at most ``n`` positions) that the type
+  alone cannot express, so it is checked, not assumed;
 * the checker is the same object-validation the other custom models use, and the
   malformed-output path is reached through the *return value* rather than through
   garbage text;
@@ -33,7 +33,6 @@ import random
 import shutil
 import subprocess
 import sys
-import textwrap
 import types
 from pathlib import Path
 

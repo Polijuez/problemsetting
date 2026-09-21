@@ -190,6 +190,29 @@ def test_new_rejects_a_language_the_template_lacks(tmp_path, monkeypatch, capsys
     assert "solutionlang: .py" in err
 
 
+
+def test_new_defaults_to_the_templates_own_declared_language(tmp_path, monkeypatch) -> None:
+    """A single-solution template is unaffected by the declared-language lookup.
+
+    ``pick_solutionlang`` reads the template's ``meta.yml`` to pick the default, so
+    that a template shipping more than one solution can say which it demonstrates.
+    For every template with one solution the declaration and the file list agree,
+    so this is the regression guard on the no-op half of that rule.
+    """
+    from problemsetting import templates
+
+    single = [
+        model
+        for model in templates.shipped()
+        if len(templates.solution_extensions(model)) == 1
+    ]
+    if not single:
+        pytest.skip("every shipped template ships more than one solution")
+    model = single[0]
+    assert run(["new", "--model", model, "demo"], monkeypatch, tmp_path) == 0
+    assert meta_mod.load(tmp_path / "demo")[1].solutionlang == templates.solution_extensions(model)[0]
+
+
 def test_new_leaves_no_directory_behind_when_it_fails(tmp_path, monkeypatch, capsys) -> None:
     from problemsetting import meta, templates
 
