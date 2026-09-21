@@ -35,35 +35,28 @@
 # (con `executor` como override) y se usan el `tl` y el `ml` declarados para ese
 # lenguaje.  Un lenguaje sin entrada en `limits:` usa 2 s / 262144 KiB.
 #
-# ---------------------------------------------------------------------------
-# SOBRE EL PUNTAJE PARCIAL DE ESTE PROBLEMA -- leer antes de tocar `suboptimal`
+# SOBRE EL PUNTAJE PARCIAL DE ESTE PROBLEMA -- leer antes de tocar `suboptimo`
 # ---------------------------------------------------------------------------
 #
 # `suboptimo.cpp` es un envío **válido y subóptimo**: el checker le otorga
 # `0.7 * point_value`, que es un `CheckerResult` con puntaje fraccionario real.
-# Pero `score:` acá es **100**, y no es un error: es la diferencia entre lo que
-# el *juez* calcula y lo que el *toolkit puede observar hoy*.
+# `score: 70` acá es ese 0.7, y es medible de punta a punta:
 #
-#   * El juez sí sabe el puntaje por caso: `Result.points` y `Result.total_points`
-#     existen (`dmoj/result.py:48,77`) y `packet.py:309` le pasa el `Result`
-#     entero a `test_case_status_packet`.
-#   * Pero la salida de consola del juez -- que es lo único que el pool lee --
-#     **nunca imprime esos puntos**.  `dmoj/judge.py:216` `_ipc_result` arma la
-#     línea con códigos, tiempo, memoria y feedback, y nada más:
+#   * El juez sabe el puntaje por caso (`Result.points`, `dmoj/result.py:48,77`)
+#     y `packet.py:309` le pasa el `Result` entero a `test_case_status_packet`.
+#   * La consola del juez no lo imprime (`dmoj/judge.py:216` `_ipc_result` arma la
+#     línea con códigos, tiempo, memoria y feedback), pero el launcher del pool
+#     sí lo emite por caso -- envuelve ese mismo paquete -- y `judges` lo expone
+#     como `CaseResult.points`/`total`.
+#   * `verify` entonces puntúa la fracción en lugar de darle el lote entero por
+#     ser AC.  Corrida observada: `batch 1  70/100 pts  AC  (AC 10)`.
 #
-#         Test case  1 AC [0.003s (0.003s wall) | 1908kb | 11 switches] (válido pero subóptimo: 9 faros, óptimo 6)
+# Esa fracción es lo que hace que este problema valga como fixture del modelo:
+# un checker que otorga puntaje parcial de verdad, y una expectativa que sólo
+# pasa si esa fracción se mide.  Antes de que el toolkit leyera los puntos por
+# caso este `score:` era 100 con un comentario explicando por qué no podía ser
+# 70; ahora el número correcto es el que se puede comprobar.
 #
-#     El veredicto es AC (que es correcto: la respuesta es válida) y el puntaje
-#     de 0.7 no aparece.
-#   * `verify.Report.score` se calcula por lotes (`BatchScore.passed` = todos los
-#     casos AC -> se lleva el lote entero), así que un AC observable vale 100.
-#
-# O sea: declarar `score: 70` acá haría fallar `verify` con "expected 70, actual
-# 100" -- no porque el problema esté mal, sino porque el número correcto todavía
-# no es medible.  La expectativa declarada es entonces la que el toolkit puede
-# comprobar hoy, y el puntaje real que el sitio otorgaría queda documentado abajo.
-#
-# Cuando el toolkit pueda leer los puntos por caso, este `score:` pasa a ser 70.
 # La fracción **no** depende de la corrida: ver el comentario de `suboptimo.cpp`
 # y por qué los tamaños del generador son múltiplos de 3.
 #
@@ -82,16 +75,15 @@ submissions:
     role: model
 
   # Válido pero subóptimo: 1.5x el óptimo, o sea `0.7 * point_value` según el
-  # checker.  Ver el bloque de arriba: el veredicto AC es lo observable hoy, y el
-  # 70/100 que el sitio otorgaría se comprueba contra los puntos por caso cuando
-  # el toolkit pueda leerlos.
+  # checker.  El 70 declarado es esa fracción, medida de verdad -- ver el bloque
+  # de arriba.
   #
   # Ojo: NO lleva `role: checker-test`.  Ese rol es para la salida que el checker
   # debe *rechazar*; ésta la acepta con puntaje parcial, así que ponerle ese rol
   # haría que la comprobación 5 la leyera como un rechazo faltante.
   - source: submissions/suboptimo.cpp
     verdict: AC
-    score: 100
+    score: 70
 
   # Un faro suelto: formato correcto, objeto inválido.  El checker lo valida y
   # devuelve `CheckerResult(False, 0)`, así que el lote no se lleva nada: WA y 0.

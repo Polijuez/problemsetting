@@ -352,9 +352,26 @@ class BatchPlan:
 class BatchScore:
     """One batch's share of a run.  The points a batch is worth are ``init.yml``'s.
 
-    ``earned`` is derived rather than stored so that "this batch paid" is stated
-    once, in :attr:`passed`: DMOJ gives a batch its points only when every case in
-    it passed, and ``--`` (a case skipped after an earlier failure) does not pass.
+    Two scoring regimes, and which one applies is decided by what the judge
+    reported:
+
+    * **All-or-nothing** (the default, and every standard batch): DMOJ gives a
+      batch its points only when every case in it passed, and ``--`` (a case
+      skipped after an earlier failure) does not pass.  This is not inferred
+      from the case *points* because a passing standard batch reports each case
+      at its own value, which sums to more than the batch is worth.
+    * **Fractional** (a custom checker): the checker returns
+      ``CheckerResult(True, 0.7 * point_value)``, so the judge reports a case
+      whose points are a *fraction* of its total.  Here the batch earns the sum
+      of what its cases were actually awarded -- ``dmoj/result.py`` carries
+      ``points``, and ``judges`` now surfaces it.
+
+    A batch counts as fractional only when some case was awarded strictly
+    between zero and its total.  That keeps the two regimes from being confused
+    in either direction: a standard batch whose cases each report their own
+    value stays all-or-nothing, and a checker that happens to award a full
+    point_value on every case is indistinguishable from -- and equivalent to --
+    the all-or-nothing result.
     """
 
     number: int
@@ -362,7 +379,33 @@ class BatchScore:
     cases: list[judges.CaseResult]
 
     @property
+    def fractional(self) -> bool:
+        """Whether the judge reported partial credit inside this batch."""
+        return any(
+            case.points is not None
+            and case.total is not None
+            and case.total > 0
+            and 0.0 < case.points < case.total
+            for case in self.cases
+        )
+
+    @property
     def earned(self) -> float:
+        if self.fractional:
+            # The judge reports each case as ``points`` out of ``total``, where
+            # ``total`` is the BATCH's declared value, not a per-case slice:
+            # measured on a checker awarding 0.7 * point_value in a 100-point
+            # batch, all cases report points=70.0 total=100.0, and in a two-batch
+            # problem the same checker reports 21.0/30 and 49.0/70.
+            #
+            # So the batch's share is the awarded ratio, which the site applies
+            # as sum(points) / sum(totals) -- not a sum of raw points, which
+            # would multiply a fraction by the case count.  Averaging the
+            # per-case fractions agrees only while every case shares one total,
+            # so the ratio is stated directly.
+            awarded = sum(case.points or 0.0 for case in self.cases)
+            possible = sum(case.total or 0.0 for case in self.cases)
+            return self.points * awarded / possible if possible else 0.0
         return self.points if self.passed else 0.0
 
     @property
