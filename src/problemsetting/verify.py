@@ -1036,6 +1036,17 @@ def grade_entry(name: str, problem_dir: Path, entry: Entry, plans: Sequence[Batc
         time_limit=entry.limits.time,
         memory_limit=entry.limits.memory,
     )
+    # A run that produced no result is not a result.  Raising here keeps an
+    # infrastructure failure (a timed-out command, a dead container, a rejected
+    # invocation) from being reported as a submission verdict -- previously a
+    # non-zero status with no verdicts was classified as a compile error, which
+    # meant a declared `verdict: CE` could be *satisfied* by a run that never
+    # compiled anything.
+    if grading.run_error is not None:
+        raise VerifyError(
+            f"{problem_dir.name}: grading {entry.source} produced no verdict: "
+            f"{grading.run_error.splitlines()[0] if grading.run_error else 'no output'}"
+        )
     groups = judges.parse_batch_cases(grading.raw)
     if groups and len(groups) != len(plans):
         raise VerifyError(

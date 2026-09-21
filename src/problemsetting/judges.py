@@ -542,12 +542,23 @@ def pool_status(count: int | None = None) -> tuple[list[tuple[str, str]], int]:
 
 @dataclasses.dataclass(frozen=True)
 class Grading:
-    """A parsed ``submit`` report."""
+    """A parsed ``submit`` report.
+
+    ``compile_error`` and ``run_error`` are deliberately distinct.  The first is
+    a *result*: the submission failed to build, which DMOJ reports as the ``CE``
+    verdict, so it legitimately satisfies an entry declaring ``verdict: CE``.
+    The second is the absence of a result: the run never produced a verdict for a
+    reason that has nothing to do with the submission (the container died, the
+    command timed out, the judge rejected the invocation).  Treating the two as
+    one made an infrastructure failure *satisfy* a declared ``CE`` and report a
+    pass on a submission that was never compiled at all.
+    """
 
     raw: str
     verdicts: dict[str, int]
     batches: list[list[str]]
     compile_error: str | None
+    run_error: str | None = None
 
     @property
     def failures(self) -> int:
@@ -682,7 +693,15 @@ def container_path(source: Path, problems_root: Path | None = None) -> str:
 #: the token after the case number; ``--`` marks a case skipped because an
 #: earlier case in the same batch failed, and it fails the batch too.
 _CASE_RE = re.compile(r"Test case\s+(\d+)\s+(\S+)")
-_BATCH_RE = re.compile(r"Batch #(\d+)")
+
+#: A batch header is a line that IS the header, not one that merely contains the
+#: text: DMOJ emits it alone (``dmoj/judge.py:242``,
+#: ``report(ansi_style('#ansi[Batch #%d](yellow|bold)'))``).  Anchoring matters
+#: because a compiler echoes the offending source line verbatim, so a submission
+#: containing ``// Batch #2`` in its source produced a diagnostic line that
+#: opened a phantom batch section -- which then looked like a stale-discovery
+#: problem instead of the compile error it was.
+_BATCH_RE = re.compile(r"^\s*Batch #(\d+)\s*$")
 
 #: The pool launcher's own per-case points line, which it prints immediately
 #: after the ``Test case`` line it describes (see
@@ -881,27 +900,44 @@ def parse_batches(raw: str) -> list[list[str]]:
 def parse_grading(raw: str, status: int) -> Grading:
     """Turn a ``submit`` transcript into a :class:`Grading`.
 
-    A command-level failure (unknown problem or language, a compile error) is
-    reported as a compile error rather than as "zero verdicts", because the two
-    need different fixes and an empty verdict set alone cannot tell them apart.
+    Three outcomes, and they are not interchangeable:
+
+    * a compile error -- the submission failed to build, which is the ``CE``
+      verdict and may satisfy an entry declaring ``CE``;
+    * a command error -- the judge rejected the invocation itself (unknown
+      problem or language), which is the author's mistake and is reported as
+      such;
+    * a run error -- anything else that produced no verdict from a non-zero
+      status.  A non-zero status with no verdicts and no compile marker means
+      the run failed, not the submission: the pool client reports its own
+      timeout this way (``error: command timed out after 600s``, exit 102).
+      Classifying that as a compile error let an infrastructure failure
+      *satisfy* a declared ``verdict: CE``, i.e. report a pass on a submission
+      that was never compiled.
     """
+    verdicts = parse_verdicts(raw)
     compile_error = None
     for marker in _COMPILE_ERROR_MARKERS:
         if marker in raw:
             compile_error = _extract_compile_error(raw)
             break
-    if compile_error is None and not parse_verdicts(raw):
+
+    run_error = None
+    if compile_error is None and not verdicts:
         for marker in _COMMAND_ERROR_MARKERS:
             if marker in raw:
-                compile_error = raw.strip()
+                run_error = raw.strip()
                 break
-    if compile_error is None and status != 0 and not parse_verdicts(raw):
-        compile_error = raw.strip() or f"judge exited with status {status}"
+        else:
+            if status != 0:
+                run_error = raw.strip() or f"judge exited with status {status}"
+
     return Grading(
         raw=raw,
-        verdicts=parse_verdicts(raw),
+        verdicts=verdicts,
         batches=parse_batches(raw),
         compile_error=compile_error,
+        run_error=run_error,
     )
 
 

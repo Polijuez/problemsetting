@@ -118,12 +118,31 @@ def test_compile_errors_are_reported_as_such_not_as_zero_verdicts() -> None:
 def test_an_unknown_problem_is_reported_rather_than_looking_empty() -> None:
     raw = "error: unknown problem 'no-such-problem'\n"
     grading = judges.parse_grading(raw, 0)
-    assert "unknown problem" in (grading.compile_error or "")
+    assert "unknown problem" in (grading.run_error or "")
+    assert grading.compile_error is None
 
 
-def test_a_nonzero_status_with_no_verdicts_is_reported() -> None:
-    grading = judges.parse_grading("something went wrong\n", 1)
-    assert grading.compile_error == "something went wrong"
+def test_a_nonzero_status_with_no_verdicts_is_a_run_error_not_a_compile_error() -> None:
+    """Infrastructure failures must not masquerade as the CE verdict.
+
+    ``compile_error`` is a *result* -- the submission failed to build, which DMOJ
+    reports as ``CE`` -- so it may satisfy an entry declaring ``verdict: CE``.
+    A non-zero status with no verdicts and no compile marker is the *absence* of
+    a result: the pool client reports its own timeout this way
+    (``error: command timed out after 600s``, exit 102).  Classifying that as a
+    compile error let an infrastructure failure satisfy a declared ``CE`` and
+    report a pass on a submission that was never compiled.
+    """
+    grading = judges.parse_grading("error: command timed out after 600s\n", 102)
+    assert grading.compile_error is None
+    assert grading.run_error == "error: command timed out after 600s"
+
+
+def test_a_genuine_compile_error_is_still_a_compile_error() -> None:
+    raw = "Failed compiling submission!\nmain.cpp:3: error: expected ';'\n"
+    grading = judges.parse_grading(raw, 1)
+    assert grading.compile_error == "Failed compiling submission!"
+    assert grading.run_error is None
 
 
 def test_verdict_lines_win_over_a_nonzero_status() -> None:

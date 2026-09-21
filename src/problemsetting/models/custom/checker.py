@@ -47,9 +47,11 @@ from dmoj.result import CheckerResult
 from dmoj.utils.unicode import utf8text
 
 #: Calidad de una respuesta válida pero no óptima.  Es la fracción que el sitio
-#: otorgaría a la submission parcial del manifest; `submissions.yml` explica por
-#: qué su `score:` declarado no es este número todavía (el transcript del juez no
-#: expone los puntos por caso).
+#: otorga a la submission parcial del manifest, y `submissions.yml` la declara
+#: como el `score:` de esa submission -- 70 para este 0.7.  La fracción es
+#: verificable de punta a punta: el launcher del pool emite los puntos por caso,
+#: `judges` los expone y `verify` puntúa la fracción en vez de darle el lote
+#: entero por ser AC.
 PUNTAJE_PARCIAL = 0.7
 
 #: Calidad de una respuesta válida que además es muy ineficiente (usa más del
