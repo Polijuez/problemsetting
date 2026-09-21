@@ -153,9 +153,25 @@ def test_new_rejects_an_unknown_model(tmp_path, monkeypatch, capsys) -> None:
     assert "standard" in err and "signature-batched" in err
 
 
-def test_new_rejects_a_model_without_a_shipped_template(tmp_path, monkeypatch, capsys) -> None:
-    err = assert_fails(["new", "--model", "custom", "demo"], monkeypatch, tmp_path, capsys)
+def test_new_rejects_a_model_without_a_shipped_template(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """An unshipped model is rejected with a message naming what IS available.
+
+    Computed rather than hard-coded: every model gains a template as the tickets
+    land, so naming one here would couple this test to how far along the toolkit
+    happens to be.  Skips once every declared model ships (nothing left to test).
+    """
+    from problemsetting import meta, templates
+
+    unshipped = sorted(set(meta.MODELS) - set(templates.shipped()))
+    if not unshipped:
+        pytest.skip("every declared model ships a template")
+
+    model = unshipped[0]
+    err = assert_fails(["new", "--model", model, "demo"], monkeypatch, tmp_path, capsys)
     assert "not shipped yet" in err
+    assert "standard" in err  # names what is available in this build
 
 
 def test_new_rejects_an_unknown_language(tmp_path, monkeypatch, capsys) -> None:
@@ -175,5 +191,9 @@ def test_new_rejects_a_language_the_template_lacks(tmp_path, monkeypatch, capsys
 
 
 def test_new_leaves_no_directory_behind_when_it_fails(tmp_path, monkeypatch, capsys) -> None:
-    assert_fails(["new", "--model", "custom", "demo"], monkeypatch, tmp_path, capsys)
+    from problemsetting import meta, templates
+
+    unshipped = sorted(set(meta.MODELS) - set(templates.shipped()))
+    model = unshipped[0] if unshipped else "wat"  # unknown model fails the same way
+    assert_fails(["new", "--model", model, "demo"], monkeypatch, tmp_path, capsys)
     assert not (tmp_path / "demo").exists()
