@@ -16,15 +16,19 @@
 //
 // y lo pasa como `aux_sources` al ejecutor del lenguaje, que además agrega el
 // `evaluator.cpp` de `init.yml` (`signature_grader: {entry: evaluator.cpp, ...}`).
-// Los tres archivos se compilan **juntos, como una sola unidad de traducción**.
-// Tres consecuencias:
+// Los tres archivos se le pasan a **una sola invocación** del compilador, que
+// compila cada uno como su propia unidad de traducción y después los enlaza.  Tres
+// consecuencias:
 //
 //   1. El `#include` lo pone el juez.  El envío puede incluirlo igual -- por eso
 //      la guarda de abajo -- pero no hace falta.
 //   2. `#define main main_<uuid>` renombra el `main` del envío para que no
 //      colisione con el de `evaluator.cpp`.  Por eso **este** header no puede
 //      definir un `main`: el juez renombra el del envío, no el de la interfaz.
-//   3. Todo se compila en una sola unidad, así que aquí sólo se **declara**.
+//   3. Como son unidades separadas, el envío y el evaluador se vinculan por el
+//      **símbolo** de la función, no por texto: de ahí que la declaración tenga
+//      que coincidir exactamente, y que `extern "C"` importe (ver abajo).  Aquí
+//      sólo se **declara**; la definición vive en el envío.
 //
 // ── Por qué la interfaz está escrita en C y no en C++ ───────────────────────
 //
@@ -51,7 +55,7 @@
 // El nombre de la función lo elige el autor del problema, pero **una vez
 // publicado es la interfaz**: cambiarlo invalida todos los envíos de los
 // concursantes (y los de submissions.yml).  `evaluator.cpp`, `solution.c` y
-// `solution.cpp` lo usan; los cuatro tienen que estar de acuerdo.
+// `solution.cpp` lo usan; los tres tienen que estar de acuerdo.
 
 #ifndef SIGNATURE_BATCHED_CUSTOM_HPP_INCLUDED
 #define SIGNATURE_BATCHED_CUSTOM_HPP_INCLUDED

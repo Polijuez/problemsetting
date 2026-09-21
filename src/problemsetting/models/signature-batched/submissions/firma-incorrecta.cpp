@@ -11,9 +11,10 @@
 // se define -- y la composición falla al linkear.
 //
 // El juez compila los tres archivos (`<problema>_submission.cpp`,
-// `signature.hpp`, `<problema>cpp.cpp`) como una sola unidad de traducción, así
-// que esa falta de definición es un error de compilación: el veredicto es **CE**,
-// no WA.  Es el resultado que submissions.yml declara, y la comprobación que
+// `signature.hpp`, `<problema>cpp.cpp`) en una sola invocación del compilador, así
+// que esa falta de definición rompe la **compilación y el enlazado** -- DMOJ reporta
+// ambas como error de compilación, así que el veredicto es **CE**, no WA.  Es el
+// resultado que submissions.yml declara, y la comprobación que
 // demuestra que el mecanismo de firma está en vigor: con un problema de E/S
 // normal, este mismo archivo compilaría y daría AC.
 //

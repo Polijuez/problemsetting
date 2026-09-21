@@ -2,7 +2,7 @@
 //
 // Éste es el archivo que `init.yml` nombra como
 // `signature_grader: {entry: evaluator.cpp}`.  El juez lo compila **junto con el
-// envío del concursante** como una sola unidad de traducción, después de
+// envío del concursante** en la misma invocación del compilador, después de
 // prefijarle a ese envío un `#include "signature.hpp"` y un
 // `#define main main_<uuid>` (los detalles del mecanismo están en la cabecera de
 // `signature.hpp`, que es el archivo que el concursante sí ve).  Por eso:

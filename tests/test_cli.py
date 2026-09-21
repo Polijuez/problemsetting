@@ -190,7 +190,6 @@ def test_new_rejects_a_language_the_template_lacks(tmp_path, monkeypatch, capsys
     assert "solutionlang: .py" in err
 
 
-
 def test_new_defaults_to_the_templates_own_declared_language(tmp_path, monkeypatch) -> None:
     """A single-solution template is unaffected by the declared-language lookup.
 
