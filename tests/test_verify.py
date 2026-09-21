@@ -19,6 +19,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 
 from problemsetting import commands
 from problemsetting import judges
@@ -353,10 +354,10 @@ def _entry(**kwargs) -> verify.Entry:
     return verify.Entry(**{**defaults, **kwargs})
 
 
-def _report(raw: str, *, compile_error: str | None = None) -> verify.Report:
+def _report(raw: str, *, compile_error: str | None = None, **entry_kwargs) -> verify.Report:
     groups = judges.parse_batch_cases(raw)
     return verify.Report(
-        entry=_entry(),
+        entry=_entry(**entry_kwargs),
         cases=judges.parse_cases(raw),
         batches=verify.attribute(_plans(), groups),
         compile_error=compile_error,
@@ -467,6 +468,358 @@ def test_an_entry_with_no_expectation_declares_none() -> None:
     assert _entry(verdict="AC").declares_expectation
     assert _entry(score=0).declares_expectation
 
+# ---------------------------------------------------------------------------
+# The six checks
+# ---------------------------------------------------------------------------
+
+#: The `standard` model: no checker, so checks 5 reports a skip.
+STANDARD_META = META
+#: A model with a checker, so check 5 has something to assert about.
+CUSTOM_META = """\
+model: custom
+solutionlang: .cpp
+limits:
+  .cpp:
+    tl: 1.0
+    ml: 262144
+"""
+
+
+def _resolved(meta_text: str = STANDARD_META) -> meta_mod.ResolvedMeta:
+    return meta_mod.resolve(yaml.safe_load(meta_text))
+
+
+def _report_for(raw: str, **entry_kwargs) -> verify.Report:
+    """One graded run over ``raw``, with the entry fields ``entry_kwargs`` names."""
+    return _report(raw, **entry_kwargs)
+
+
+#: Every case accepted, which is full marks for the model solution.
+AC_RUN = "Batch #1\nTest case  1 AC [0.002s (0.002s wall) | 3000kb | 1 switch]\nBatch #2\nTest case  1 AC [0.003s (0.003s wall) | 4000kb | 1 switch]\n"
+
+
+def _checks(
+    reports, meta_text: str = STANDARD_META, checker: str | None = None
+) -> dict[int, verify.Check]:
+    return {
+        check.number: check
+        for check in verify.run_checks(reports, _resolved(meta_text), checker)
+    }
+
+
+def test_check_1_passes_when_the_model_solution_scores_full_marks() -> None:
+    report = _report_for(AC_RUN, role="model")
+    check = _checks([report])[1]
+    assert check.status == verify.PASS
+    assert check.number == 1 and check.name == verify.CHECK_NAMES[1]
+
+
+def test_check_1_fails_when_the_model_solution_is_not_accepted() -> None:
+    """A broken model solution must be caught here, not only in the entry's own FAIL."""
+    report = _report_for(BATCHED, role="model")
+    check = _checks([report])[1]
+    assert check.status == verify.FAIL
+    assert check.problems and "solution.cpp" in check.problems[0]
+
+
+def test_check_1_fails_when_an_accepted_run_earns_only_part_of_the_points() -> None:
+    """A scoring checker can pass with fewer points; ``AC`` alone is not full marks."""
+    shortened = "Batch #1\nTest case  1 AC [0.001s (0.001s wall) | 1kb | 1 switch]\n"
+    report = _report_for(shortened, role="model")
+    assert report.verdict == "AC"
+    assert verify.check_model_solution([report]).status == verify.FAIL
+
+
+def test_check_1_is_skipped_with_a_reason_without_a_model_role() -> None:
+    check = _checks([_report_for(AC_RUN)])[1]
+    assert check.status == verify.SKIP
+    assert "role: model" in check.detail
+
+
+def test_check_2_passes_when_the_declared_failing_verdict_matches() -> None:
+    report = _report_for(BATCHED, verdict="WA")
+    check = _checks([report])[2]
+    assert check.status == verify.PASS
+
+
+def test_check_2_fails_when_an_intended_wrong_submission_is_accepted() -> None:
+    """The headline failure: the problem stopped rejecting a wrong answer."""
+    report = _report_for(AC_RUN, verdict="WA")
+    check = _checks([report])[2]
+    assert check.status == verify.FAIL
+    assert "verdict WA" in check.problems[0]
+
+
+def test_check_2_does_not_exclude_a_tle_declaration() -> None:
+    """TLE is a failing verdict, so it is check 2's subject as well as check 3's."""
+    report = _report_for(BATCHED, verdict="TLE")
+    checks = _checks([report])
+    assert checks[2].status == verify.FAIL
+    assert checks[3].status == verify.FAIL
+
+
+def test_check_2_excludes_the_checker_test_entry() -> None:
+    """A checker-test's verdict is check 5's, not this one's."""
+    report = _report_for(BATCHED, verdict="WA", role="checker-test")
+    assert _checks([report])[2].status == verify.SKIP
+
+
+def test_check_2_is_skipped_with_a_reason_without_a_failing_declaration() -> None:
+    check = _checks([_report_for(AC_RUN, verdict="AC")])[2]
+    assert check.status == verify.SKIP
+    assert "failing verdict" in check.detail
+
+
+def test_check_3_passes_when_a_declared_tle_really_tles() -> None:
+    raw = "Batch #1\nTest case  1 TLE [1.001s (1.001s wall) | 1kb | 1 switch]\nTest case  2 --\nBatch #2\nTest case  1 --\n"
+    report = _report_for(raw, verdict="TLE")
+    check = _checks([report])[3]
+    assert check.status == verify.PASS
+    assert "tl=1s" in check.detail
+
+
+def test_check_3_fails_when_the_too_slow_submission_finishes() -> None:
+    """A time limit that is not tight: the slow submission was accepted."""
+    report = _report_for(AC_RUN, verdict="TLE")
+    check = _checks([report])[3]
+    assert check.status == verify.FAIL
+    assert "expected TLE" in check.problems[0]
+
+
+def test_check_3_is_skipped_with_a_reason_without_a_tle_declaration() -> None:
+    check = _checks([_report_for(BATCHED, verdict="WA")])[3]
+    assert check.status == verify.SKIP
+    assert "verdict: TLE" in check.detail
+
+
+def test_check_3_fails_when_the_slow_submission_was_wrong_as_well() -> None:
+    """TLE alone proves nothing: a wrong-and-slow submission proves nothing about the limit."""
+    raw = (
+        "Batch #1\n"
+        "Test case  1 WA [0.001s (0.001s wall) | 1kb | 1 switch]\n"
+        "Test case  2 --\n"
+        "Batch #2\n"
+        "Test case  1 TLE [1.001s (1.001s wall) | 1kb | 1 switch]\n"
+    )
+    check = _checks([_report_for(raw, verdict="TLE")])[3]
+    assert check.status == verify.FAIL
+    assert "wrong-and-slow" in check.problems[0]
+
+
+def test_check_3_passes_when_the_slow_submission_was_correct_until_it_timed_out() -> None:
+    raw = (
+        "Batch #1\n"
+        "Test case  1 AC [0.001s (0.001s wall) | 1kb | 1 switch]\n"
+        "Test case  2 TLE [1.001s (1.001s wall) | 1kb | 1 switch]\n"
+        "Test case  3 --\n"
+    )
+    check = _checks([_report_for(raw, verdict="TLE")])[3]
+    assert check.status == verify.PASS
+    assert "AC on 1 case(s) and no wrong answer" in check.detail
+
+
+def test_check_3_says_when_the_correctness_rests_on_the_declaration_alone() -> None:
+    """A timeout before any case completed observed no correct case."""
+    raw = "Batch #1\nTest case  1 TLE [1.001s (1.001s wall) | 1kb | 1 switch]\nTest case  2 --\n"
+    check = _checks([_report_for(raw, verdict="TLE")])[3]
+    assert check.status == verify.PASS
+    assert "rests on its declaration" in check.detail
+
+
+def test_check_4_passes_when_the_brute_force_is_accepted_on_every_declared_case() -> None:
+    report = _report_for(AC_RUN, role="brute")
+    check = _checks([report])[4]
+    assert check.status == verify.PASS
+    assert "matching the model solution" in check.detail
+
+
+def test_check_4_fails_when_the_brute_force_disagrees() -> None:
+    """The expected outputs are the model solution's; a rejection is a disagreement."""
+    report = _report_for(BATCHED, role="brute")
+    check = _checks([report])[4]
+    assert check.status == verify.FAIL
+    assert "disagreement" in check.problems[0]
+
+
+def test_check_4_fails_when_the_brute_force_was_never_graded() -> None:
+    """Not graded is not agreement: this is the check that cannot silently pass."""
+    report = dataclasses.replace(
+        _report_for("", role="brute"),
+        compile_error="Failed compiling submission!",
+    )
+    check = _checks([report])[4]
+    assert check.status == verify.FAIL
+    assert "never graded" in check.problems[0]
+
+
+def test_check_4_is_skipped_with_a_reason_without_a_brute_role() -> None:
+    check = _checks([_report_for(AC_RUN)])[4]
+    assert check.status == verify.SKIP
+    assert "role: brute" in check.detail
+
+
+CHECKER_FILE = "checker.py"
+
+
+def test_check_5_passes_when_the_checker_rejects_the_malformed_output() -> None:
+    report = _report_for(BATCHED, role="checker-test", verdict="WA")
+    check = _checks([report], CUSTOM_META, CHECKER_FILE)[5]
+    assert check.status == verify.PASS
+    assert f"WA, which is {CHECKER_FILE} rejecting it" in check.detail
+
+
+def test_check_5_fails_when_the_checker_accepts_it() -> None:
+    report = _report_for(AC_RUN, role="checker-test", verdict="WA")
+    check = _checks([report], CUSTOM_META, CHECKER_FILE)[5]
+    assert check.status == verify.FAIL
+    assert "accepted a deliberately malformed output" in check.problems[0]
+
+
+def test_check_5_fails_when_the_malformed_output_was_never_graded() -> None:
+    report = dataclasses.replace(
+        _report_for("", role="checker-test", verdict="WA"),
+        compile_error="Failed compiling submission!",
+    )
+    check = _checks([report], CUSTOM_META, CHECKER_FILE)[5]
+    assert check.status == verify.FAIL
+    assert "no rejection was observed" in check.problems[0]
+
+
+def test_check_5_fails_on_a_verdict_that_means_the_checker_never_ran() -> None:
+    """DMOJ skips the checker for a submission that already failed; RTE proves nothing."""
+    raw = "Batch #1\nTest case  1 RTE [0.001s (0.001s wall) | 1kb | 1 switch]\n"
+    check = _checks([_report_for(raw, role="checker-test", verdict="WA")], CUSTOM_META, CHECKER_FILE)[5]
+    assert check.status == verify.FAIL
+    assert "never ran" in check.problems[0]
+
+
+def test_check_5_passes_only_on_a_wa_rejection() -> None:
+    raw = "Batch #1\nTest case  1 WA [0.001s (0.001s wall) | 1kb | 1 switch]\n"
+    check = _checks([_report_for(raw, role="checker-test", verdict="WA")], CUSTOM_META, CHECKER_FILE)[5]
+    assert check.status == verify.PASS
+
+
+def test_check_5_is_skipped_with_a_reason_on_a_model_without_a_checker() -> None:
+    check = _checks([_report_for(BATCHED, role="checker-test", verdict="WA")])[5]
+    assert check.status == verify.SKIP
+    assert "no checker" in check.detail and "standard" in check.detail
+
+
+def test_check_5_will_not_trust_a_checker_axis_init_yml_does_not_carry() -> None:
+    """``meta.yml`` asking for a checker the judge does not have is not a pass.
+
+    DMOJ reads ``checker:`` from ``init.yml`` (``dmoj/problem.py:506``), so a
+    ``meta.yml`` whose ``checker: custom`` was never regenerated into it leaves
+    the standard comparison in force -- and a ``WA`` from that comparison is not
+    a checker rejecting anything.
+    """
+    check = _checks([_report_for(BATCHED, role="checker-test", verdict="WA")], CUSTOM_META)[5]
+    assert check.status == verify.SKIP
+    assert "init.yml declares no `checker:`" in check.detail
+    assert "problemsetting cases" in check.detail
+
+
+def test_check_5_is_skipped_when_no_checker_test_is_declared() -> None:
+    check = _checks([_report_for(BATCHED, verdict="WA")], CUSTOM_META, CHECKER_FILE)[5]
+    assert check.status == verify.SKIP
+    assert "role: checker-test" in check.detail
+
+
+def test_check_6_reports_the_measurements_and_the_limits_in_force() -> None:
+    """Reporting only: the check passes by reporting, and names the limits."""
+    check = _checks([_report_for(BATCHED)])[6]
+    assert check.status == verify.PASS
+    assert "slowest case 0.003s" in check.detail
+    assert "peak 4200 KiB" in check.detail
+    assert "tl=1s ml=262144KiB" in check.detail
+    assert "never set from these" in check.detail
+
+
+def test_check_6_reports_the_measurements_of_a_failed_run_too() -> None:
+    """Calibration needs the observation even when the submission was rejected."""
+    check = _checks([_report_for(BATCHED, verdict="WA")])[6]
+    assert check.status == verify.PASS
+
+
+def test_check_6_is_skipped_with_a_reason_when_nothing_was_measured() -> None:
+    check = _checks([_report_for("Batch #1\nTest case  1 --\n")])[6]
+    assert check.status == verify.SKIP
+    assert "nothing to calibrate" in check.detail
+
+
+def test_all_six_checks_are_returned_in_order() -> None:
+    checks = verify.run_checks([_report_for(AC_RUN)], _resolved(), None)
+    assert [check.number for check in checks] == [1, 2, 3, 4, 5, 6]
+    assert [check.name for check in checks] == [verify.CHECK_NAMES[n] for n in range(1, 7)]
+    assert all(check.status in (verify.PASS, verify.FAIL, verify.SKIP) for check in checks)
+
+
+def test_every_skip_carries_a_reason() -> None:
+    """A skipped check that does not say why is the silent pass this ticket forbids."""
+    checks = verify.run_checks([_report_for(AC_RUN)], _resolved(), None)
+    assert checks[1].status == verify.SKIP
+    for check in checks:
+        if check.status == verify.SKIP:
+            assert check.detail.strip()
+            assert not check.problems
+
+
+def test_a_skip_does_not_fail_the_run_and_a_failure_does() -> None:
+    """Skipped is not failed; failed is."""
+    skipped = verify.run_checks([_report_for(AC_RUN, role="model")], _resolved(), None)
+    assert not any(check.failed for check in skipped)
+    failed = verify.run_checks(
+        [_report_for(AC_RUN, role="model", verdict="WA")], _resolved(), None
+    )
+    assert any(check.failed for check in failed)
+
+
+def test_init_checker_reads_the_key_the_judge_reads(problem: Path) -> None:
+    """The checker in force comes from ``init.yml``, the file DMOJ loads."""
+    (problem / "init.yml").write_text(
+        "archive: demo.zip\nchecker: checker.py\ntest_cases:\n"
+        "- points: 100\n  batched:\n  - {in: cases/0.in, out: cases/0.out}\n",
+        encoding="utf-8",
+    )
+    assert verify.init_checker(problem) == "checker.py"
+
+
+def test_init_checker_is_none_without_the_key(problem: Path) -> None:
+    (problem / "init.yml").write_text(
+        "archive: demo.zip\ntest_cases:\n"
+        "- points: 100\n  batched:\n  - {in: cases/0.in, out: cases/0.out}\n",
+        encoding="utf-8",
+    )
+    assert verify.init_checker(problem) is None
+
+
+def test_the_expected_vs_actual_recap_prints_even_when_no_check_failed(capsys) -> None:
+    """A mismatch no check covers still fails the run, so its recap must print.
+
+    An entry declaring ``verdict: AC`` with no ``role:`` is the case: no check
+    claims it, every check skips, and the only explanation of the exit status is
+    the recap.
+    """
+    report = _report_for(BATCHED, verdict="AC")
+    checks = verify.run_checks([report], _resolved(), None)
+    assert not any(check.failed for check in checks)
+    verify._print_failures(checks, [report], 20)
+    out = capsys.readouterr().out
+    assert "expected vs actual:" in out
+    assert "expected verdict AC" in out and "actual verdict WA" in out
+    assert "failed checks:" not in out
+
+
+def test_the_failed_checks_block_names_each_failing_check(capsys) -> None:
+    """A broken model solution and a wrong-declared entry name checks 1 and 2."""
+    model = _report_for(BATCHED, role="model", verdict="AC")
+    wrong = _report_for(AC_RUN, verdict="WA")
+    checks = verify.run_checks([model, wrong], _resolved(), None)
+    verify._print_failures(checks, [model, wrong], 20)
+    out = capsys.readouterr().out
+    assert "failed checks:" in out
+    assert "check 1 (model solution scores full marks)" in out
+    assert "check 2 (intended-wrong submissions get their declared verdict)" in out
 
 # ---------------------------------------------------------------------------
 # The command

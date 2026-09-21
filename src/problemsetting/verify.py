@@ -32,6 +32,20 @@ Two facts about how DMOJ reports a run decide the shape of the report:
 * **Measurements are observations.**  The judge reports each case's time and
   memory, and they are printed so limits can be calibrated by hand -- the toolkit
   never writes a limit from them.
+
+Checks, not just a report (decision Q6).  ``verify`` answers "is this problem
+correct?" with six named checks, each printed with its own number and status, so
+a failure says *which* check failed: the model solution scores full marks; the
+submissions meant to fail get the verdict they declare; a correct-but-too-slow
+submission gets ``TLE``; the brute force agrees with the model solution on the
+declared cases; the checker rejects a deliberately malformed output; and the
+judge's measurements are reported so limits can be calibrated by hand.
+
+A check the problem does not let us run -- no ``role: brute`` entry, say -- is
+printed as **skipped with the reason**, never as a pass.  A check that reports
+success without having run is worse than no check at all, which is why every
+check below names its subject in ``submissions.yml`` (the declared role or the
+declared verdict) rather than assuming it.
 """
 
 from __future__ import annotations
@@ -57,6 +71,10 @@ VERDICT_KEY = "verdict"
 SCORE_KEY = "score"
 ROLE_KEY = "role"
 EXECUTOR_KEY = "executor"
+
+#: ``init.yml``'s key that puts a checker in force -- the file DMOJ reads
+#: (``dmoj/problem.py:506``: ``self.config['checker'] or 'standard'``).
+CHECKER_KEY = "checker"
 
 #: Every key an entry accepts, in canonical order.
 VALID_KEYS: tuple[str, ...] = (SOURCE_KEY, VERDICT_KEY, SCORE_KEY, ROLE_KEY, EXECUTOR_KEY)
@@ -407,6 +425,11 @@ class Report:
         return 100.0 * self.earned / self.total if self.total else 0.0
 
     @property
+    def source_name(self) -> str:
+        """The submission's path as it is printed: relative, POSIX-separated."""
+        return self.entry.source.as_posix()
+
+    @property
     def slowest(self) -> float | None:
         times = [case.time for case in self.cases if case.time is not None]
         return max(times) if times else None
@@ -505,6 +528,411 @@ def mismatches(report: Report) -> list[tuple[str, str]]:
             )
     return found
 
+# ---------------------------------------------------------------------------
+# The six checks
+# ---------------------------------------------------------------------------
+
+#: The three roles that name a check's subject (decision Q23's ``role:`` field).
+#: A check reads its subject from the manifest rather than guessing it, so what
+#: each check asserts is visible and editable in ``submissions.yml``.
+MODEL_ROLE = "model"
+BRUTE_ROLE = "brute"
+CHECKER_TEST_ROLE = "checker-test"
+
+#: A check's three states.  ``SKIP`` is not a fourth kind of pass: it means the
+#: problem gave the check nothing to run on, and it carries the reason.
+PASS = "pass"
+FAIL = "fail"
+SKIP = "skip"
+
+#: The checks' names, by number.  One table, so a name is not restated at every
+#: site that reports a check.
+CHECK_NAMES: dict[int, str] = {
+    1: "model solution scores full marks",
+    2: "intended-wrong submissions get their declared verdict",
+    3: "a correct-but-too-slow submission gets TLE",
+    4: "brute force agrees with the model solution on the declared cases",
+    5: "the checker rejects a deliberately malformed output",
+    6: "measurements are reported for calibration",
+}
+
+
+@dataclasses.dataclass(frozen=True)
+class Check:
+    """One of the six checks: whether it ran, and what it found.
+
+    ``detail`` is the one-line answer -- what was checked and with what result --
+    and ``problems`` lists the individual submissions that failed it, so a
+    failure names the submission as well as the check.  ``skip`` never comes with
+    empty ``detail``: a check that did not run must say why.
+    """
+
+    number: int
+    name: str
+    status: str
+    detail: str
+    problems: tuple[str, ...] = ()
+
+    @property
+    def failed(self) -> bool:
+        return self.status == FAIL
+
+
+def _check(number: int, status: str, detail: str, problems: Sequence[str] = ()) -> Check:
+    return Check(number, CHECK_NAMES[number], status, detail, tuple(problems))
+
+
+def _skipped(number: int, reason: str) -> Check:
+    """A check the problem gave nothing to run on.  The reason is the whole point."""
+    return _check(number, SKIP, reason)
+
+
+def _source(report: Report) -> str:
+    return report.source_name
+
+
+def _sources(reports: Sequence[Report]) -> str:
+    return ", ".join(report.source_name for report in reports)
+
+
+def _ungraded(report: Report, consequence: str) -> str:
+    """A submission the judge never graded, and the observation that leaves missing.
+
+    "Never graded" is not a pass for any check that needs an observation: a
+    compile error, or a transcript with no case line at all, says nothing about
+    the submission, and a check that took it as agreement would be exactly the
+    silent pass this command must not produce.
+    """
+    return f"{_source(report)}: never graded ({report.verdict}), so {consequence}"
+
+
+def _verdict_line(report: Report) -> str:
+    return f"{report.verdict}, {_percent(report.score)}/100"
+
+
+def check_model_solution(reports: Sequence[Report]) -> Check:
+    """Check 1: the model solution scores full marks.
+
+    Full marks is not the same as ``AC``: DMOJ takes the verdict from
+    ``CheckerResult.passed`` and the points from ``CheckerResult.points``
+    (``dmoj/graders/standard.py:37-40``), so a scoring checker can pass a
+    submission with a fraction of the points.  Both are asserted.
+    """
+    models = [report for report in reports if report.entry.role == MODEL_ROLE]
+    if not models:
+        return _skipped(
+            1,
+            "no submission declares `role: model`; declare the model solution so its "
+            "full-marks score is checked",
+        )
+    problems = [
+        f"{_source(report)}: expected AC and 100/100, got {_verdict_line(report)}"
+        for report in models
+        if not _full_marks(report)
+    ]
+    if problems:
+        return _check(1, FAIL, f"{len(models)} model submission(s) graded", problems)
+    return _check(1, PASS, ", ".join(f"{_source(r)}: {_verdict_line(r)}" for r in models))
+
+
+def _full_marks(report: Report) -> bool:
+    """Whether a run earned every point the problem declares.
+
+    A run with no cases -- a compile error, or a submission the judge never
+    graded -- is not full marks: nothing was earned.
+    """
+    return (
+        bool(report.cases)
+        and report.total > 0
+        and abs(report.score - 100.0) <= _SCORE_TOLERANCE
+    )
+
+
+def check_declared_verdicts(reports: Sequence[Report]) -> Check:
+    """Check 2: intended-wrong submissions get the verdict they declare.
+
+    The headline check.  Its subjects are the entries that declare a failing
+    verdict -- ``WA``, ``TLE``, ``MLE``, ``RTE``, ... -- and their *declared
+    expectations* (verdict and score together) are what must hold, because a
+    submission with the right verdict and the wrong score is still a problem
+    whose scoring is not what the author declared.
+
+    ``role: checker-test`` entries are check 5's subject, not this one, and are
+    the only exclusion: everything else that declares failure is graded here.
+    """
+    subjects = [
+        report
+        for report in reports
+        if report.entry.role != CHECKER_TEST_ROLE
+        and report.entry.verdict is not None
+        and report.entry.verdict != "AC"
+    ]
+    if not subjects:
+        return _skipped(
+            2,
+            "no submission declares a failing verdict (WA, TLE, MLE, ...); nothing here "
+            "proves the problem rejects a wrong answer",
+        )
+    problems = [
+        f"{_source(report)}: expected {expected}, got {actual}"
+        for report in subjects
+        for expected, actual in mismatches(report)
+    ]
+    if problems:
+        return _check(2, FAIL, f"{len(subjects)} failing submission(s) declared", problems)
+    return _check(
+        2, PASS, f"{len(subjects)} submission(s) got their declared result: {_sources(subjects)}"
+    )
+
+
+def check_time_limit(reports: Sequence[Report]) -> Check:
+    """Check 3: a correct-but-too-slow submission gets ``TLE``.
+
+    Separate from check 2 because "wrong answer" and "too slow" fail for
+    different reasons and a problem can be broken in either dimension alone: a
+    limit that is far too generous is invisible to every other check.
+
+    A ``TLE`` alone is not enough.  A submission that is *wrong and slow* also
+    times out, and would prove nothing about the limit, so a pass here also
+    requires that no case was rejected for a reason other than time -- the AC
+    cases are the evidence the submission was otherwise correct.
+
+    Note that time is not the only thing that fails a case: ``judges.submit``
+    grades with ``short_circuit=False`` (``dmoj/commands/submit.py``), so a
+    ``TLE`` does not stop the remaining cases the way a ``WA`` does.  The claim
+    is therefore "no wrong answer was observed", not "everything before the
+    timeout was correct".
+    """
+    subjects = [report for report in reports if report.entry.verdict == "TLE"]
+    if not subjects:
+        return _skipped(
+            3,
+            "no submission declares `verdict: TLE`; without a correct-but-too-slow "
+            "submission nothing proves the time limit is tight",
+        )
+    problems = []
+    accepted = []
+    for report in subjects:
+        if report.verdict != "TLE":
+            problems.append(
+                f"{_source(report)}: expected TLE at tl={report.entry.limits.time:g}s, "
+                f"got {_verdict_line(report)}"
+            )
+            continue
+        # A TLE alone does not say the submission was *correct* and slow: one that
+        # is wrong as well can time out too, and it would prove nothing about the
+        # limit.  Any verdict other than AC/TLE/SC on any case means the
+        # submission was rejected for something other than time, so it is not the
+        # correct-but-slow reference this check needs.
+        wrong = sorted(code for code in report.counts if code not in ("AC", "TLE", "SC"))
+        if wrong:
+            problems.append(
+                f"{_source(report)}: TLE, but it also got {', '.join(wrong)} -- a "
+                f"wrong-and-slow submission does not prove the limit is tight"
+            )
+        else:
+            graded = report.counts.get("AC", 0)
+            accepted.append(
+                f"{_source(report)}: TLE at tl={report.entry.limits.time:g}s"
+                + (
+                    f", AC on {graded} case(s) and no wrong answer, so it is correct as far "
+                    f"as the judge observed"
+                    if graded
+                    else ", with no case completed, so its correctness rests on its "
+                    "declaration"
+                )
+            )
+    if problems:
+        return _check(3, FAIL, f"{len(subjects)} submission(s) declared TLE", problems)
+    return _check(3, PASS, ", ".join(accepted))
+
+
+def check_brute_force(reports: Sequence[Report]) -> Check:
+    """Check 4: the brute force agrees with the model solution on the declared cases.
+
+    The expected outputs are the model solution's (``problemsetting outputs``
+    runs it over the generated cases), so a brute force that is accepted on every
+    declared case has, by construction, produced the model solution's answer
+    there -- any disagreement shows up as a rejection.  That is why this check is
+    a *declared-case* comparison and not a random one: fresh random cases are
+    ``problemsetting stress``'s job (ticket 07).
+    """
+    brutes = [report for report in reports if report.entry.role == BRUTE_ROLE]
+    if not brutes:
+        return _skipped(
+            4,
+            "no submission declares `role: brute`; declare the reference brute force so it "
+            "can be cross-checked against the model solution on the declared cases",
+        )
+    problems = []
+    for report in brutes:
+        if not report.cases:
+            problems.append(
+                _ungraded(report, "agreement with the model solution was not observed")
+            )
+        elif report.verdict != "AC":
+            rejected = ", ".join(sorted(code for code in report.counts if code != "AC"))
+            problems.append(
+                f"{_source(report)}: {report.verdict} on the declared cases ({rejected}); the "
+                f"expected outputs are the model solution's, so a rejection is a disagreement"
+            )
+    if problems:
+        return _check(4, FAIL, f"{len(brutes)} brute force submission(s) declared", problems)
+    return _check(
+        4,
+        PASS,
+        ", ".join(
+            f"{_source(report)}: AC on all {len(report.cases)} declared case(s), matching "
+            f"the model solution"
+            for report in brutes
+        ),
+    )
+
+
+def init_checker(problem_dir: Path) -> str | None:
+    """The ``checker:`` file the judge will load, or None when there is none.
+
+    Read from the generated ``init.yml``, not from ``meta.yml``'s checker axis,
+    because that is what DMOJ reads: ``dmoj/problem.py:506`` takes
+    ``self.config['checker'] or 'standard'``.  A ``meta.yml`` whose checker axis
+    is ``custom`` while ``init.yml`` predates it has **no checker in force**, and
+    a check that trusted the axis would call the standard comparison's verdict a
+    checker rejection.
+    """
+    value = cases_mod.load_init(problem_dir).get(CHECKER_KEY)
+    return value if isinstance(value, str) and value else None
+
+
+def check_checker_rejects(
+    reports: Sequence[Report], resolved: meta_mod.ResolvedMeta, checker: str | None
+) -> Check:
+    """Check 5: the checker rejects a deliberately malformed output.
+
+    The malformed output is declared as ``role: checker-test``, never hardcoded,
+    so what the checker must reject is visible and editable like every other
+    expectation.
+
+    ``checker`` is the checker ``init.yml`` puts in force -- see
+    :func:`init_checker`.  With none, the standard comparison grades the entry
+    instead and its verdict proves nothing about a checker, so the check skips
+    and says why; that includes the case where ``meta.yml`` asks for a checker
+    the ``init.yml`` in front of the judge does not have, which is a build the
+    author must regenerate rather than a pass.
+
+    A rejection is only a rejection when the checker actually decided: DMOJ
+    folds its verdict in as ``[WA, AC][check.passed]`` and **skips running it**
+    for a submission that already failed on its own
+    (``dmoj/graders/standard.py:39, 53-56`` -- checkers may be very expensive).
+    So a rejection is exactly ``WA``; an ``RTE``/``MLE``/``OLE`` means the
+    malformed output crashed or was killed and the checker never saw it, and a
+    submission that was never graded observed nothing at all.
+    """
+    subjects = _checker_tests(reports)
+    declared = f" (declared anyway: {_sources(subjects)})" if subjects else ""
+    if checker is None:
+        if resolved.uses_checker:
+            return _skipped(
+                5,
+                f"meta.yml declares checker: custom, but init.yml declares no `checker:`, so the "
+                f"judge is running the standard comparison and nothing here tests a checker. "
+                f"Regenerate init.yml with `problemsetting cases`{declared}",
+            )
+        return _skipped(
+            5,
+            f"model {resolved.model!r} has no checker (`checker: none`), so there is no "
+            f"checker for a malformed output to be rejected by{declared}",
+        )
+    if not subjects:
+        return _skipped(
+            5,
+            f"{checker} is in force, but no submission declares `role: checker-test`; declare "
+            f"the deliberately malformed output the checker must reject",
+        )
+    problems = []
+    for report in subjects:
+        if not report.cases:
+            problems.append(_ungraded(report, "no rejection was observed"))
+        elif report.verdict == "AC":
+            problems.append(
+                f"{_source(report)}: AC -- {checker} accepted a deliberately malformed output"
+            )
+        elif report.verdict != "WA":
+            problems.append(
+                f"{_source(report)}: {report.verdict} -- {checker} never ran (DMOJ skips it for "
+                f"a submission that failed on its own), so no rejection was observed"
+            )
+    if problems:
+        return _check(5, FAIL, f"{len(subjects)} checker-test submission(s) declared", problems)
+    return _check(
+        5,
+        PASS,
+        ", ".join(
+            f"{_source(report)}: WA, which is {checker} rejecting it" for report in subjects
+        ),
+    )
+
+
+def _checker_tests(reports: Sequence[Report]) -> list[Report]:
+    return [report for report in reports if report.entry.role == CHECKER_TEST_ROLE]
+
+
+def check_measurements(reports: Sequence[Report], resolved: meta_mod.ResolvedMeta) -> Check:
+    """Check 6: the judge's measurements are reported so limits can be calibrated.
+
+    **Reporting only.**  The measured time and memory are never written back as a
+    limit -- calibrating is a human decision about the problem statement, and a
+    toolkit that silently set a limit from one run would bake in the machine's
+    speed.  The limits actually in force are printed beside so the observations
+    can be read against them.
+    """
+    measured = [
+        report
+        for report in reports
+        if report.cases and (report.slowest is not None or report.memory is not None)
+    ]
+    if not measured:
+        return _skipped(
+            6,
+            "no graded case reported a time or memory measurement; there is nothing to "
+            "calibrate a limit from",
+        )
+    slowest = max(report.slowest for report in measured if report.slowest is not None)
+    memories = [report.memory for report in measured if report.memory is not None]
+    keys = sorted({report.entry.limits_key for report in measured})
+    in_force = ", ".join(
+        f"{key} tl={resolved.limits[key].time:g}s ml={resolved.limits[key].memory}KiB"
+        for key in keys
+    )
+    return _check(
+        6,
+        PASS,
+        f"slowest case {slowest:.3f}s, peak {max(memories) if memories else 0} KiB over "
+        f"{len(measured)} submission(s); limits in force: {in_force} (reported only, "
+        f"never set from these)",
+    )
+
+
+def run_checks(
+    reports: Sequence[Report],
+    resolved: meta_mod.ResolvedMeta,
+    checker: str | None,
+) -> list[Check]:
+    """All six checks, in order, over the runs that were graded.
+
+    ``checker`` is ``init.yml``'s ``checker:`` (see :func:`init_checker`), not
+    ``resolved.uses_checker``: check 5 has to ask the judge's own source of
+    truth, or a ``meta.yml`` whose checker axis is newer than the built
+    ``init.yml`` would be read as a checker that is not in force.
+    """
+    return [
+        check_model_solution(reports),
+        check_declared_verdicts(reports),
+        check_time_limit(reports),
+        check_brute_force(reports),
+        check_checker_rejects(reports, resolved, checker),
+        check_measurements(reports, resolved),
+    ]
+
 
 def _print_batches(report: Report) -> None:
     for batch in report.batches:
@@ -594,8 +1022,10 @@ def run_verify(problem: str) -> int:
     print(f"==> verify {problem_dir.name}  (model {resolved.model}, judge {name})")
     width = max(len(entry.source.as_posix()) for entry in entries)
     mismatched: list[Report] = []
+    reports: list[Report] = []
     for entry in entries:
         report = grade_entry(name, problem_dir, entry, plans)
+        reports.append(report)
         _print_entry(report, width, entry.index)
         if not entry.declares_expectation:
             print("      no expectation declared: reported for information only")
@@ -612,6 +1042,37 @@ def run_verify(problem: str) -> int:
         f"verify: {len(entries)} submission(s), {declared} with expectations, "
         f"{len(mismatched)} mismatch(es)"
     )
+    checks = run_checks(reports, resolved, init_checker(problem_dir))
+    _print_checks(checks)
+    _print_failures(checks, mismatched, width)
+    if mismatched or any(check.failed for check in checks):
+        return 1
+    return 0
+
+
+def _print_checks(checks: Sequence[Check]) -> None:
+    """One line per check, each named and numbered, so a failure is attributable."""
+    print("checks:")
+    for check in checks:
+        print(f"  {check.number}. {check.name:<58}  {check.status.upper()}")
+        print(f"       {check.detail}")
+        for problem in check.problems:
+            print(f"       - {problem}")
+
+
+def _print_failures(checks: Sequence[Check], mismatched: Sequence[Report], width: int) -> None:
+    """What failed: each check by name, then the entries whose expectation missed.
+
+    The two blocks are independent.  A mismatch that no check covers -- an entry
+    declaring ``verdict: AC`` with no ``role:`` makes every check skip -- still
+    fails the run, so its recap prints whether or not a check failed.
+    """
+    if failed := [check for check in checks if check.failed]:
+        print("failed checks:")
+        for check in failed:
+            print(f"  check {check.number} ({check.name})")
+            for problem in check.problems:
+                print(f"    {problem}")
     if mismatched:
         print("expected vs actual:")
         for report in mismatched:
@@ -625,9 +1086,7 @@ def run_verify(problem: str) -> int:
                 if part
             )
             actual = f"verdict {report.verdict}, score {_percent(report.score)}/100"
-            print(f"  {entry.source.as_posix():<{width}}  expected {expected}  |  actual {actual}")
-        return 1
-    return 0
+            print(f"  {report.source_name:<{width}}  expected {expected}  |  actual {actual}")
 
 
 def _running_container() -> str:
