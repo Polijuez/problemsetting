@@ -18,10 +18,13 @@
 // otra vía: allá la basura venía del texto, acá del valor de retorno.
 //
 // Un envío que devolviera un `K` mayor que las posiciones que escribió también
-// sería malformado, pero de una forma distinta: el evaluador leería **fuera** del
-// arreglo (comportamiento indefinido) para imprimir esas posiciones, así que no es
-// un envío honesto ni determinista.  Por eso este archivo se queda en el `K`
-// inválido, que el evaluador puede imprimir sin tocar memoria ajena.
+// sería malformado, pero por otra rama: el evaluador imprime ese `K` **sin
+// corregirlo** -- es el único modo de que la mentira llegue al checker -- y acota
+// el bucle de impresión a la capacidad del arreglo, así que la salida queda con una
+// primera línea que no coincide con las posiciones que trae.  La rechaza la
+// comprobación de cantidad, no la de rango.  Este archivo se queda en el `K` fuera
+// de rango porque es la rama más barata y determinista, y porque no escribe nada en
+// `faros`: la otra habría que construirla de verdad para ser honesta.
 //
 // Si el checker estuviera roto aceptando esto, la comprobación 5 fallaría con «el
 // checker aceptó una salida deliberadamente malformada».

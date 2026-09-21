@@ -690,6 +690,54 @@ def test_the_declared_ce_submissions_are_the_only_ones_with_a_wrong_signature(
     ).read_text(encoding="utf-8")
 
 
+def test_a_return_value_larger_than_the_buffer_is_clamped_not_read_past_the_end(
+    template: Path, tmp_path: Path, checker_module
+) -> None:
+    """A lying return value must be a clean rejection, not undefined behaviour.
+
+    The function's count is a return value, so a submission can declare more
+    positions than it wrote -- and an evaluator that looped ``i < K`` over its
+    ``malloc(n)`` buffer would read past the end.  That is undefined behaviour, and
+    the run would surface as ``RTE``/``IR`` -- a broken problem -- instead of the
+    ``WA`` a wrong submission is supposed to get.
+
+    The template's evaluator prints the count **unclamped** (the checker has to see
+    the lie) and clamps only the loop.  This drives a submission that lies, and
+    asserts the two consequences that matter: the composed program terminates with
+    a well-formed two-line output, and the checker rejects it cleanly.  Which
+    branch rejects it is not the point -- with ``K > n`` the range test fires first,
+    and the declared-count test would fire for a lie that stayed in range -- so the
+    assertion is "rejected, with 0 points", not a specific message.
+    """
+    liar = tmp_path / "liar.cpp"
+    liar.write_text(
+        '#include "signature.hpp"\n'
+        f"int {FUNCTION}(int n, int *faros) {{\n"
+        "    for (int j = 0; j < n; ++j) faros[j] = j + 1;\n"
+        "    return n + 5;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    sources = _compose("siglie", liar, template, ".cpp", tmp_path / "staged")
+    binary = tmp_path / "liar"
+    result = _compile(sources, binary, ".cpp")
+    assert result.returncode == 0, result.stderr
+
+    n = 6
+    run_result = subprocess.run(
+        [str(binary)], input=f"{n}\n", capture_output=True, text=True
+    )
+    assert run_result.returncode == 0, "the evaluator must not fault on a lying count"
+    got = run_result.stdout.split()
+    declared, positions = int(got[0]), [int(token) for token in got[1:]]
+    assert declared == n + 5, "the lie must reach the first line, or nothing can see it"
+    assert len(positions) == n, "and the read must stay inside the buffer"
+
+    output = f"{declared}\n" + " ".join(str(position) for position in positions) + "\n"
+    check_result = check(checker_module, output, n=n, model_out=model_output(n))
+    assert check_result.passed is False and check_result.points == 0.0
+
+
 def test_no_test_run_writes_into_the_template() -> None:
     """The template directory is package data; nothing here may write into it."""
     directory = templates.template_dir(MODEL)

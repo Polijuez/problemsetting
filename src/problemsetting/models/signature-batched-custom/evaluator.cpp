@@ -62,10 +62,19 @@ int main(void) {
 
     const int colocados = iluminar(n, faros);
 
-    // El formato que lee el checker: la cantidad en la primera línea, y después
-    // esa cantidad de posiciones separadas por espacios.
+    // La cantidad que se imprime primero es la que devolvió la función, **sin
+    // corregirla**: si miente, el checker tiene que ver la mentira para poder
+    // rechazarla ("declara K faros pero manda M posiciones").
     printf("%d\n", colocados);
-    for (int i = 0; i < colocados; ++i) {
+
+    // Pero las posiciones que se *leen* del arreglo van acotadas a su capacidad,
+    // que es `n`: la función promete no escribir más de `n`, así que leer más allá
+    // sería leer memoria ajena -- comportamiento indefinido, y un fallo del
+    // proceso en vez del WA que corresponde.  Con `colocados > n` el lazo imprime
+    // `n` posiciones y la primera línea queda mintiendo, que es exactamente lo que
+    // el checker detecta.
+    const int a_imprimir = colocados < n ? colocados : n;
+    for (int i = 0; i < a_imprimir; ++i) {
         printf("%s%d", i ? " " : "", faros[i]);
     }
     printf("\n");
