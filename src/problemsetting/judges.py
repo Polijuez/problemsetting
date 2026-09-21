@@ -643,6 +643,16 @@ def container_path(source: Path, problems_root: Path | None = None) -> str:
 _CASE_RE = re.compile(r"Test case\s+(\d+)\s+(\S+)")
 _BATCH_RE = re.compile(r"Batch #(\d+)")
 
+#: The pool launcher's own per-case points line, which it prints immediately
+#: after the ``Test case`` line it describes (see
+#: :func:`problemsetting.judge_runtime.launcher.case_points_line`).  DMOJ's own
+#: transcript never carries points, so this line is the only way a fractional
+#: ``CheckerResult`` score -- a checker returning ``CheckerResult(True, 0.7 *
+#: point_value)`` -- is distinguishable from full marks.  It is optional: a
+#: transcript without it (or from a judge driven directly, without the launcher)
+#: parses exactly as it did before, with the points simply unknown.
+_CASE_POINTS_RE = re.compile(r"<<<DMOJ-POOL CASE\s+(\d+)\s+([^/\s]+)/([^>\s]+)>>>")
+
 #: The measurement that follows a verdict, as ``dmoj/judge.py:_ipc_result``
 #: formats it: ``[0.004s (0.005s wall) | 3964kb | 14 switches ...]``.  Only the
 #: CPU time and the peak memory are captured -- the wall clock is the same
@@ -678,13 +688,30 @@ class CaseResult:
     """One ``Test case`` line: its verdict and what the judge measured.
 
     ``time`` is seconds and ``memory`` is KiB, exactly as the judge reported
-    them; they are observation only, never fed back as a limit.
+    them; they are observation only, never fed back as a limit.  ``points`` and
+    ``total`` are the grader's own score for the case and what it was worth,
+    taken from the launcher's synthetic points line; both are ``None`` when the
+    transcript carries no such line, which is what a judge driven outside the
+    pool reports.
     """
 
     number: int
     verdict: str
     time: float | None = None
     memory: int | None = None
+    points: float | None = None
+    total: float | None = None
+
+    @property
+    def fraction(self) -> float | None:
+        """``points`` as a share of what the case was worth, or None if unknown.
+
+        A zero-point case has no share to report -- every verdict earns all of
+        nothing -- so it answers None rather than dividing by zero.
+        """
+        if self.points is None or not self.total:
+            return None
+        return self.points / self.total
 
 
 def parse_case_line(line: str) -> CaseResult | None:
@@ -709,12 +736,62 @@ def parse_case_line(line: str) -> CaseResult | None:
     return None
 
 
+def parse_case_points(line: str) -> tuple[int, float, float] | None:
+    """The ``(position, points, total)`` one points line carries, or None.
+
+    ``position`` is the same ``case_number`` DMOJ printed on the ``Test case``
+    line it follows -- one global counter across the whole run, batches included
+    (``dmoj/judge.py`` incrementing ``case_number`` before each case), which is
+    what makes the pair matchable even though a batch restarts nothing.
+    """
+    match = _CASE_POINTS_RE.search(_ANSI_RE.sub("", line))
+    if match is None:
+        return None
+    try:
+        return int(match.group(1)), float(match.group(2)), float(match.group(3))
+    except ValueError:  # a malformed line must not lose the run
+        return None
+
+
+def _scored_case(line: str, following: str | None) -> CaseResult | None:
+    """The case ``line`` reports, with ``following``'s points folded in.
+
+    ``following`` is the next line in the transcript, which is where the
+    launcher puts a case's points line.  The fold only binds when that line's
+    position matches the case, so a malformed, doubled or stray line is simply
+    left to be read as the ordinary non-case line it falls back to.
+    """
+    case = parse_case_line(line)
+    if case is None or following is None:
+        return case
+    scored = parse_case_points(following)
+    if scored is None:
+        return case
+    position, points, total = scored
+    if position != case.number:
+        return case
+    return dataclasses.replace(case, points=points, total=total)
+
+
 def parse_cases(raw: str) -> list[CaseResult]:
-    """Every reported case, in judge order, with its verdict and measurements."""
+    """Every reported case, in judge order, with its verdict and measurements.
+
+    A ``Test case`` line can also contain ``Batch #k``: DMOJ interpolates the
+    grader's feedback into it (``dmoj/judge.py`` ``colored_feedback``) and a
+    checker may echo the submission's own text there.  This reader has always
+    taken such a line for the case it reports, so it must not consult the batch
+    header at all.
+    """
+    lines = _ANSI_RE.sub("", raw).splitlines()
     results: list[CaseResult] = []
-    for line in _ANSI_RE.sub("", raw).splitlines():
-        if (case := parse_case_line(line)) is not None:
+    index = 0
+    while index < len(lines):
+        case = _scored_case(lines[index], lines[index + 1] if index + 1 < len(lines) else None)
+        if case is not None:
             results.append(case)
+            if case.points is not None:
+                index += 1  # the points line it consumed
+        index += 1
     return results
 
 
@@ -727,14 +804,31 @@ def parse_verdicts(raw: str) -> dict[str, int]:
 
 
 def parse_batch_cases(raw: str) -> list[list[CaseResult]]:
-    """Group reported cases by ``Batch #k`` section, in the order reported."""
+    """Group reported cases by ``Batch #k`` section, in the order reported.
+
+    Sectioning is on the header first, which is the opposite precedence to
+    :func:`parse_cases` and always has been: a ``Batch #k`` line opens a section
+    even if it is also a ``Test case`` line (see that function), and a case
+    before the first header belongs to no section.
+    """
+    lines = _ANSI_RE.sub("", raw).splitlines()
     batches: list[list[CaseResult]] = []
-    for line in _ANSI_RE.sub("", raw).splitlines():
+    index = 0
+    while index < len(lines):
+        line = lines[index]
         if _BATCH_RE.search(line):
             batches.append([])
+            index += 1
             continue
-        if batches and (case := parse_case_line(line)) is not None:
+        case = _scored_case(line, lines[index + 1] if index + 1 < len(lines) else None)
+        if case is None:
+            index += 1
+            continue
+        if batches:
             batches[-1].append(case)
+        if case.points is not None:
+            index += 1  # the points line it consumed
+        index += 1
     return batches
 
 

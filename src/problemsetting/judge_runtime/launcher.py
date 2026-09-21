@@ -8,7 +8,7 @@ from stdin.  Holding that process open is what makes a *pool* of judges worth
 anything: the second submission into the same container pays neither the
 self-test nor the problem scan again.
 
-Two things ``dmoj-cli`` does not give us are added here, both by composing the
+Three things ``dmoj-cli`` does not give us are added here, all by composing the
 same DMOJ classes rather than reimplementing judge behaviour:
 
 * **a control endpoint.**  ``dmoj/control.py`` exposes ``/update/problems``, but
@@ -25,6 +25,18 @@ same DMOJ classes rather than reimplementing judge behaviour:
   mirrored to ``/run/dmoj-pool/spool/<id>.out`` so that
   :mod:`problemsetting.judge_runtime.client` can stream exactly one command's
   output back to the toolkit, no matter what else the container is printing.
+
+* **per-case points.**  DMOJ's transcript reports a case's verdict, its time and
+  its memory but never what the grader awarded it (``dmoj/judge.py:216``
+  ``_ipc_result``): a checker that returns ``CheckerResult(True, 0.7 * point_value)``
+  is indistinguishable, on the wire, from one that returns full marks.  The
+  value is in-process the whole time -- ``Result.points`` holds what was
+  awarded and ``Result.total_points`` what the case was worth
+  (``dmoj/result.py:48,77``) -- and ``test_case_status_packet(position, result)``
+  is handed the whole ``Result`` right after that line is printed
+  (``dmoj/judge.py:236-237``).  ``LocalPacketManager`` makes that method a no-op,
+  so the pool replaces it with one that prints :data:`CASE_POINTS_FMT` beside
+  the case it describes; :mod:`problemsetting.judges` reads the pair.
 
 The process exits -- stopping the container -- after ``JUDGE_IDLE_TIMEOUT``
 seconds with no command (idle autostop, decision Q28).
@@ -64,6 +76,35 @@ API_PORT = int(os.environ.get("JUDGE_API_PORT", "9998"))
 #: text -- so the client keys off these two lines and nothing else.
 MARKER_FMT = "<<<DMOJ-POOL {kind} {command_id}>>>"
 END_MARKER_FMT = "<<<DMOJ-POOL END {command_id} rc={status}>>>"
+
+#: One synthetic line per graded case, carrying the two numbers DMOJ never
+#: prints: the points the grader awarded, and what the case was worth.  It is
+#: emitted immediately after the case's own ``Test case`` line, so the two are
+#: read together in the order the judge reported them.  The numbers are
+#: ``repr``-ed -- ``0.7`` stays ``0.7`` -- so a fractional score survives the
+#: transcript exactly, and the line still belongs to the pool's own vocabulary
+#: (``<<<DMOJ-POOL ...>>>``) rather than looking like judge output.
+CASE_POINTS_FMT = "<<<DMOJ-POOL CASE {position} {points!r}/{total!r}>>>"
+
+
+def case_points_line(position: int, points: float, total: float) -> str:
+    """The transcript line for one case's points.
+
+    A plain function so the format is readable and testable without a judge
+    (nothing here imports ``dmoj``, which only exists inside the container).
+    """
+    return CASE_POINTS_FMT.format(position=position, points=points, total=total)
+
+
+def _test_case_status_packet(position, result) -> None:
+    """``LocalPacketManager.test_case_status_packet`` with the points kept.
+
+    Installed on the judge's own packet manager (:func:`_install`).  DMOJ calls
+    it with the whole ``Result`` for every graded case and ignores it, so this
+    is where the two numbers the transcript drops are still available.
+    """
+    print(case_points_line(position, result.points, result.total_points), flush=True)
+
 
 #: DMOJ's own commands are written as ``execute(...) -> Optional[int]`` and in
 #: practice all return ``None`` on success (``dmoj/commands/submit.py:execute``
@@ -157,6 +198,12 @@ def _install() -> None:
     contrib.load_contrib_modules()
 
     judge = LocalJudge()
+    # `LocalPacketManager.test_case_status_packet` is a no-op, and it is the one
+    # hook handed the whole `Result` -- points included -- right after the case
+    # line is printed (`dmoj/judge.py:236-237`).  Replacing the bound method on
+    # the judge's own instance keeps every other packet method, and the judge's
+    # behaviour, exactly DMOJ's; only this one observation is added.
+    judge.packet_manager.test_case_status_packet = _test_case_status_packet
     for command in all_commands:
         register_command(command(judge))
 
