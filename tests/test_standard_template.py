@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import importlib.util
+import support
 import random
 from pathlib import Path
 
@@ -21,13 +21,9 @@ def template() -> Path:
 
 @pytest.fixture(scope="module")
 def generator_module(template: Path):
-    spec = importlib.util.spec_from_file_location(
-        "standard_generator", template / "generator.py"
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    # Via support.load_module, not importlib: a template is shipped package data,
+    # and importlib's file loader would leave __pycache__ inside it.
+    return support.load_module(template / "generator.py", "standard_generator")
 
 
 def test_template_ships_the_whole_problem(template: Path) -> None:
