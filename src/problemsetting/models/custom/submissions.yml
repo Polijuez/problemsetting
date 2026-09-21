@@ -1,0 +1,119 @@
+# submissions.yml -- envíos declarados del problema, con el resultado que se
+# espera de cada uno.
+#
+# Es el archivo que consume `problemsetting verify`: en vez de confiar en una
+# convención de nombres (el toolkit viejo asumía que todo lo que estuviera en
+# submissions/ debía dar AC), cada envío declara acá qué veredicto y qué puntaje
+# tiene que obtener.  Así un envío no puede desincronizarse en silencio: si la
+# realidad no coincide con la expectativa declarada, `verify` falla.
+#
+# Campos:
+#   source   Ruta al archivo de la submission, relativa al directorio del
+#            problema.  Obligatorio.
+#   verdict  Veredicto DMOJ esperado: AC, WA, TLE, MLE, OLE, RTE, IR, SC o CE.
+#            Opcional.
+#   score    Puntaje esperado, como porcentaje del total del problema (0 a 100).
+#            Opcional.
+#   role     Para qué sirve el envío dentro del toolkit.  Informativo para
+#            `verify`; los tickets posteriores leen este campo en vez de volver a
+#            declarar el envío:
+#              model         la solución modelo (la que produce los `.out`).
+#              brute         la fuerza bruta de referencia, que el stress test
+#                            compara contra la solución modelo sobre casos
+#                            diminutos.
+#              checker-test  salida deliberadamente malformada, para comprobar
+#                            que el checker la rechaza en vez de romperse.
+#            Opcional.
+#   executor Ejecutor DMOJ con el que se corre este envío, cuando no se quiere
+#            inferir del sufijo del archivo (por ejemplo PYPY3 para un `.py`, o
+#            CPP20 para un `.cpp`).  Opcional.
+#
+# Un envío sin `verdict` ni `score` es informativo: se corre y se reporta, pero no
+# puede hacer fallar a `verify`.
+#
+# Los límites salen de `meta.yml`: el lenguaje del envío se infiere de su sufijo
+# (con `executor` como override) y se usan el `tl` y el `ml` declarados para ese
+# lenguaje.  Un lenguaje sin entrada en `limits:` usa 2 s / 262144 KiB.
+#
+# ---------------------------------------------------------------------------
+# SOBRE EL PUNTAJE PARCIAL DE ESTE PROBLEMA -- leer antes de tocar `suboptimal`
+# ---------------------------------------------------------------------------
+#
+# `suboptimo.cpp` es un envío **válido y subóptimo**: el checker le otorga
+# `0.7 * point_value`, que es un `CheckerResult` con puntaje fraccionario real.
+# Pero `score:` acá es **100**, y no es un error: es la diferencia entre lo que
+# el *juez* calcula y lo que el *toolkit puede observar hoy*.
+#
+#   * El juez sí sabe el puntaje por caso: `Result.points` y `Result.total_points`
+#     existen (`dmoj/result.py:48,77`) y `packet.py:309` le pasa el `Result`
+#     entero a `test_case_status_packet`.
+#   * Pero la salida de consola del juez -- que es lo único que el pool lee --
+#     **nunca imprime esos puntos**.  `dmoj/judge.py:216` `_ipc_result` arma la
+#     línea con códigos, tiempo, memoria y feedback, y nada más:
+#
+#         Test case  1 AC [0.003s (0.003s wall) | 1908kb | 11 switches] (válido pero subóptimo: 9 faros, óptimo 6)
+#
+#     El veredicto es AC (que es correcto: la respuesta es válida) y el puntaje
+#     de 0.7 no aparece.
+#   * `verify.Report.score` se calcula por lotes (`BatchScore.passed` = todos los
+#     casos AC -> se lleva el lote entero), así que un AC observable vale 100.
+#
+# O sea: declarar `score: 70` acá haría fallar `verify` con "expected 70, actual
+# 100" -- no porque el problema esté mal, sino porque el número correcto todavía
+# no es medible.  La expectativa declarada es entonces la que el toolkit puede
+# comprobar hoy, y el puntaje real que el sitio otorgaría queda documentado abajo.
+#
+# Cuando el toolkit pueda leer los puntos por caso, este `score:` pasa a ser 70.
+# La fracción **no** depende de la corrida: ver el comentario de `suboptimo.cpp`
+# y por qué los tamaños del generador son múltiplos de 3.
+#
+# Los otros envíos no se ven afectados, y por eso este problema sigue probando lo
+# que tiene que probar: `invalido.cpp` saca 0 y `malformado.cpp` da WA, dos
+# resultados que el veredicto sí distingue del AC del puntaje parcial.
+
+submissions:
+  # La solución modelo es la misma que produce los `.out`, así que se declara acá
+  # por ruta en vez de duplicarla en submissions/.  Su puntaje completo también
+  # es la evidencia de que el checker no castiga una construcción distinta de la
+  # del modelo: la fuerza bruta usa otro camino y también saca 100.
+  - source: solution.cpp
+    verdict: AC
+    score: 100
+    role: model
+
+  # Válido pero subóptimo: 1.5x el óptimo, o sea `0.7 * point_value` según el
+  # checker.  Ver el bloque de arriba: el veredicto AC es lo observable hoy, y el
+  # 70/100 que el sitio otorgaría se comprueba contra los puntos por caso cuando
+  # el toolkit pueda leerlos.
+  #
+  # Ojo: NO lleva `role: checker-test`.  Ese rol es para la salida que el checker
+  # debe *rechazar*; ésta la acepta con puntaje parcial, así que ponerle ese rol
+  # haría que la comprobación 5 la leyera como un rechazo faltante.
+  - source: submissions/suboptimo.cpp
+    verdict: AC
+    score: 100
+
+  # Un faro suelto: formato correcto, objeto inválido.  El checker lo valida y
+  # devuelve `CheckerResult(False, 0)`, así que el lote no se lleva nada: WA y 0.
+  # Es el sujeto de la comprobación 2 de `verify`.
+  - source: submissions/invalido.cpp
+    verdict: WA
+    score: 0
+
+  # Salida malformada: texto donde el formato pide números.  Es el sujeto de la
+  # comprobación 5.  El checker la rechaza con WA en su rama barata y
+  # determinista; un checker que se rompiera con basura daría error interno y
+  # `verify` lo reportaría como problema roto.
+  - source: submissions/malformado.cpp
+    verdict: WA
+    score: 0
+    role: checker-test
+
+  # Fuerza bruta correcta y óptima: la referencia del stress test (`role: brute`).
+  # No lleva puntaje esperado propio más allá del completo porque la comparación
+  # que importa -- contra la solución modelo sobre casos diminutos de `gen_small`
+  # -- la hace la comprobación 4, no una expectativa acá.
+  - source: submissions/fuerza-bruta.cpp
+    verdict: AC
+    score: 100
+    role: brute
