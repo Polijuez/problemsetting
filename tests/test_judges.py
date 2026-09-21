@@ -292,3 +292,35 @@ def test_list_containers_sorts_by_ordinal(monkeypatch) -> None:
         (10, f"{judges.NAME_PREFIX}10", "exited"),
     ]
     assert judges.running_containers() == [f"{judges.NAME_PREFIX}1", f"{judges.NAME_PREFIX}2"]
+
+
+def test_stop_removes_autostopped_containers_too(monkeypatch, capsys) -> None:
+    """An idle container autostops and stays behind in the ``exited`` state.
+
+    ``judges stop`` used to iterate :func:`running_containers` only, so those
+    exited containers were invisible to it and accumulated silently -- six
+    survived several stops in practice.  Stop must mean "remove ours", whatever
+    state they are in.
+    """
+    output = (
+        f"{judges.NAME_PREFIX}1 running\n"
+        f"{judges.NAME_PREFIX}2 exited\n"
+        f"{judges.NAME_PREFIX}3 exited\n"
+    )
+    monkeypatch.setattr(
+        judges, "_capture", lambda args: subprocess.CompletedProcess(args, 0, output, "")
+    )
+    removed: list[str] = []
+    monkeypatch.setattr(
+        judges,
+        "stop_container",
+        lambda name: (removed.append(name), True)[1],
+    )
+
+    assert judges._action_stop(None) == 0
+    assert removed == [
+        f"{judges.NAME_PREFIX}1",
+        f"{judges.NAME_PREFIX}2",
+        f"{judges.NAME_PREFIX}3",
+    ]
+    assert len(capsys.readouterr().out.strip().splitlines()) == 3

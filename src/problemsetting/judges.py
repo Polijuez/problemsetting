@@ -1053,7 +1053,11 @@ def _action_start(args) -> int:
 
 
 def _action_stop(_args) -> int:
-    stopped = [name for name in running_containers() if stop_container(name)]
+    # Every container of ours, not just the running ones: an idle container
+    # autostops itself and stays behind in the ``exited`` state, so a stop that
+    # only looked at running containers left those to accumulate silently.  Observed
+    # in practice -- six autostopped containers survived several `judges stop`s.
+    stopped = [name for _, name, _ in list_containers() if stop_container(name)]
     for name in stopped:
         print(f"stopped {name}")
     if not stopped:
