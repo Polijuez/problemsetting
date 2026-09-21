@@ -1,0 +1,105 @@
+# submissions.yml -- envíos declarados del problema, con el resultado que se
+# espera de cada uno.
+#
+# Es el archivo que consume `problemsetting verify`: en vez de confiar en una
+# convención de nombres (el toolkit viejo asumía que todo lo que estuviera en
+# submissions/ debía dar AC), cada envío declara acá qué veredicto y qué puntaje
+# tiene que obtener.  Así un envío no puede desincronizarse en silencio: si la
+# realidad no coincide con la expectativa declarada, `verify` falla.
+#
+# Campos:
+#   source   Ruta al archivo de la submission, relativa al directorio del
+#            problema.  Obligatorio.
+#   verdict  Veredicto DMOJ esperado: AC, WA, TLE, MLE, OLE, RTE, IR, SC o CE.
+#            Opcional.
+#   score    Puntaje esperado, como porcentaje del total del problema (0 a 100).
+#            Opcional.
+#   role     Para qué sirve el envío dentro del toolkit.  Informativo para
+#            `verify`; los tickets posteriores leen este campo en vez de volver a
+#            declarar el envío:
+#              model         la solución modelo (la que produce los `.out`).
+#              brute         la fuerza bruta de referencia, que el stress test
+#                            compara contra la solución modelo sobre casos
+#                            diminutos.
+#              checker-test  salida deliberadamente malformada, para comprobar
+#                            que el checker la rechaza en vez de romperse.
+#            Opcional.
+#   executor Ejecutor DMOJ con el que se corre este envío, cuando no se quiere
+#            inferir del sufijo del archivo (por ejemplo PYPY3 para un `.py`, o
+#            CPP20 para un `.cpp`).  Opcional.
+#
+# Un envío sin `verdict` ni `score` es informativo: se corre y se reporta, pero no
+# puede hacer fallar a `verify`.
+#
+# Los límites salen de `meta.yml`: el lenguaje del envío se infiere de su sufijo
+# (con `executor` como override) y se usan el `tl` y el `ml` declarados para ese
+# lenguaje.
+#
+# Las expectativas de este archivo salen de una corrida real de
+# `problemsetting verify`, no de razonarlas.  En un problema con subtareas eso no
+# es un detalle: DMOJ corta el lote apenas un caso no lo pasa, y omite por
+# completo los lotes cuyos prerrequisitos no pasaron (sus casos quedan en SC, sin
+# ejecutarse).  Un TLE también corta el resto de su lote, porque el resultado de
+# un caso agotado lleva el flag de WA además del de TLE -- se ve en la corrida
+# anotada más abajo (`AC 10, SC 5, TLE 1`).  Así que el puntaje que queda es una
+# composición del corte, de la omisión por dependencia y del tiempo agotado, y
+# predecirla a mano es exactamente cómo se publican expectativas equivocadas.
+#
+# Este problema **no declara ningún `role: brute`**, y es a propósito, pero el
+# motivo no es "no hace falta": es que acá *no existe* un brute declarable.  La
+# comprobación 4 de `verify` exige que el envío con `role: brute` sea AC sobre
+# *todos* los casos declarados, y `problemsetting stress` exige lo mismo sobre
+# los casos diminutos que genera `gen_small`.  Un brute honesto para este
+# enunciado es cúbico, y los casos declarados llegan a 10^5 caracteres, donde la
+# cúbica tarda más de un minuto: cualquier envío que pase la comprobación 4 no
+# sería un brute, y el único que sí lo es (naive.py) da TLE en los lotes
+# grandes.  Declararlo con `role: brute` haría *fallar* la comprobación 4, que es
+# peor que omitirla.
+#
+# Consecuencia observable y prevista: `verify` omite la comprobación 4 y
+# `stress` termina con "no submission declares `role: brute`" y código de salida
+# 0.  Ninguno de los dos es un fallo; ambos dicen por qué no corrieron.  La
+# comparación que sí los reemplaza está en `tests/test_model_batched.py`, que
+# corre la solución modelo contra un cálculo por definición sobre cientos de
+# cadenas chicas al azar -- el mismo cross-check, donde el costo cúbico es
+# irrelevante.
+
+submissions:
+  # La solución modelo (Manacher, O(|s|)) es la misma que produce los `.out`,
+  # así que se declara acá por ruta en vez de duplicarla en submissions/.
+  - source: solution.cpp
+    verdict: AC
+    score: 100
+    role: model
+
+  # La escalera de complejidades, que es el contenido del problema:
+  #
+  #   naive.py        fuerza bruta O(N^3) -- 20/100: sólo la Subtarea 1.
+  #   cuadratico.py   expansión alrededor de cada centro, O(N^2) -- 70/100: las
+  #                   Subtareas 1, 2 y 3; se queda sin tiempo en la 4.
+  #
+  # Los dos son *correctos*: no fallan por respuesta incorrecta, fallan por
+  # tiempo.  Por eso también son la evidencia de que el límite de 1 s de
+  # meta.yml es el que separa las tres complejidades, y no un adorno.
+
+  # La corrida real que fijó las expectativas de este envío:
+  #
+  #   batch 1  20/20 pts  AC
+  #   batch 2   0/25 pts  TLE  (AC 10, SC 5, TLE 1)
+  #   batch 3   0/25 pts  SC   (SC 22)   <- la dependencia: no se corre
+  #   batch 4   0/30 pts  TLE  (AC 10, SC 17, TLE 1)
+  #
+  # La fila de la Subtarea 3 es la que ejercita el mecanismo de `dependencies`:
+  # como ST2 no se pasó completa, el juez omite sus casos con SC en vez de
+  # correrlos y fallarlos por tiempo.  Es observable y distinto de WA.
+  - source: submissions/naive.py
+    verdict: TLE
+    score: 20
+
+  # Correcta pero demasiado lenta: es el envío que ejercita la comprobación 3
+  # ("un envío correcto pero lento da TLE").  La corrida real: ST1, ST2 y ST3
+  # AC (con la cuadrática de 5000 caracteres en ~0.55 s, justo por debajo del
+  # límite), y ST4 TLE en el caso uniforme de 10^5.
+  - source: submissions/cuadratico.py
+    verdict: TLE
+    score: 70
