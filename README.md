@@ -396,10 +396,19 @@ problemsetting stress    compare the model solution against the declared brute f
   `verify`, `outputs` o `archive` no encuentran `init.yml`, el error ahora nombra
   los checksums y apunta a este comando.
 
+## Mantener un repositorio de problemas
+
+Esta guía cubre cómo se usa el toolkit desde **este** repo.  Para levantar y
+operar un repositorio de problemas propio —con el toolkit vendorizado como
+submódulo, las dos raíces (toolkit y `problems/`), la autoría, la generación, la
+calificación local, el flujo de regeneración y los fallos probables— la
+referencia es `docs/maintaining-a-problemset.md`, versionada junto con la CLI
+que describe.
+
 ## Instalación
 
-Este repo es **el** toolkit: los repos de problemas lo consumen como una
-dependencia Git de `uv`, fijada a un commit.  Desde un repo de problemas:
+Este repo es **el** toolkit: una forma de consumirlo es como una dependencia Git
+de `uv`, fijada a un commit.  Desde un repo de problemas:
 
 ```bash
 uv add "problemsetting @ git+https://github.com/Polijuez/problemsetting@<commit-sha>"
@@ -416,6 +425,11 @@ y el `uv.lock` fija el commit exacto, así que dos máquinas construyen las mism
 versiones.  La CLI queda disponible como `uv run problemsetting ...` dentro de
 ese repo, y las plantillas viajan **dentro del paquete** (son package data), así
 que no hay un directorio de plantillas que mantener sincronizado aparte.
+
+Esa forma instala sólo el paquete; el repositorio de problemas de referencia usa
+la otra: **vendoriza este repositorio entero como submódulo**, que es lo que le
+da el `vendor/judge-server` con el que construir la imagen.  El procedimiento
+completo, con las dos raíces, está en `docs/maintaining-a-problemset.md`.
 
 Con la dependencia alcanza para `new`, `cases`, `outputs`, `archive` y `build`.
 **`verify` y `stress` necesitan además un checkout del toolkit**, porque montan
