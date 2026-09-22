@@ -34,22 +34,33 @@ less than the batch number that declares them, nested batches are rejected
 outright (``InvalidInitException('nested batches')``), and a batch that selects
 no case is refused here because an empty ``batched:`` key is YAML ``null`` and
 the judge iterates that value.
+
+The archive is written *reproducibly* -- fixed member timestamps, sorted
+membership, pinned permissions and compression level (:func:`write_reproducible_zip`)
+-- so that a checksum committed beside it survives a fresh clone.  Two checksums
+are written on every archive (decision Q15): the SHA-256 of the archive bytes and
+an independent SHA-256 manifest of the case *data*, so an unrelated repackaging
+cannot masquerade as a change in the cases (or the reverse).
 """
 
 from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import io
+import json
 import re
+import shutil
 import types
 import zipfile
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
 import yaml
 
+from . import judges
 from . import meta as meta_mod
 from .commands import Command, register
 from .errors import CaseError
@@ -490,7 +501,7 @@ def run(args: argparse.Namespace) -> int:
 
 
 def run_cases(problem: str, *, seed: int | None = None) -> int:
-    problem_dir = Path.cwd() / problem
+    problem_dir = judges.resolve_problem(problem)
     # meta.yml first: the model decides whether cases even have input files.
     _, resolved = meta_mod.load(problem_dir)
 
@@ -656,8 +667,151 @@ def case_pairs(document: dict[str, Any], source: str) -> list[tuple[str | None, 
     return pairs
 
 
+#: Fixed timestamp carried by every archive member: the ZIP epoch, 1980-01-01.
+#: A real modification time is the one field that differs between two clones of
+#: identical source, so pinning it is what makes the archive reproducible
+#: (decision Q21; the plan's probe finding 3: ``ZipFile.write`` embeds the real
+#: mtime, so two clones of one problem produced different archives).
+ARCHIVE_DATE_TIME = (1980, 1, 1, 0, 0, 0)
+
+#: Fixed Unix attributes for every member: a regular file with mode ``rw-r--r--``.
+#: The alternative is the source file's own mode, which varies with the umask and
+#: with how the checkout was made.
+ARCHIVE_MEMBER_ATTR = 0o100644 << 16
+
+#: Fixed deflate level.  ``zipfile``'s default (``-1``) means "whatever zlib's
+#: default is", which is not a documented constant; naming the level makes the
+#: archive bytes a function of the inputs alone.
+ARCHIVE_COMPRESS_LEVEL = 9
+
+#: Suffix of every committed checksum file (decision Q16).
+CHECKSUM_SUFFIX = ".sha256sum"
+
+
+def write_reproducible_zip(archive_path: Path, members: Sequence[tuple[str, Path]]) -> None:
+    """Write ``(arcname, source)`` pairs as a zip that is byte-identical per input.
+
+    Everything that would otherwise leak the build environment into the bytes is
+    pinned (decision Q21):
+
+    * each member's timestamp (:data:`ARCHIVE_DATE_TIME`, the ZIP epoch) --
+      without this, a fresh clone's mtimes change the archive;
+    * each member's attributes (:data:`ARCHIVE_MEMBER_ATTR`) -- otherwise the
+      checkout's permissions show through;
+    * the deflate level (:data:`ARCHIVE_COMPRESS_LEVEL`);
+    * the member order, sorted by ``arcname``, so the caller's order (which comes
+      from ``init.yml``) cannot leak into the bytes.
+
+    ``ZipFile.write`` cannot be used for this: it takes the timestamp straight
+    from the source file.  Members are streamed rather than buffered, because a
+    case file can be megabytes and the archive is rebuilt wholesale on every run.
+    """
+    with zipfile.ZipFile(
+        archive_path, "w", zipfile.ZIP_DEFLATED, compresslevel=ARCHIVE_COMPRESS_LEVEL
+    ) as archive:
+        for arcname, source in sorted(members, key=lambda member: member[0]):
+            info = zipfile.ZipInfo(arcname, date_time=ARCHIVE_DATE_TIME)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.compress_level = ARCHIVE_COMPRESS_LEVEL
+            info.create_system = 3  # Unix: the attributes above are a Unix mode.
+            info.external_attr = ARCHIVE_MEMBER_ATTR
+            info.file_size = source.stat().st_size
+            with archive.open(info, "w") as destination, source.open("rb") as origin:
+                shutil.copyfileobj(origin, destination, length=1 << 20)
+
+
+def sha256_file(path: Path) -> str:
+    """The SHA-256 of a file's bytes, as lowercase hexadecimal.
+
+    Streamed by ``hashlib.file_digest`` rather than read whole: a case file can be
+    megabytes, and this runs once per member on every archive.
+    """
+    with path.open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
+def archive_checksum_name(archive_name: str) -> str:
+    """The checksum of the archive bytes, named after the *declared* archive.
+
+    Derived from ``init.yml``'s ``archive:`` value rather than a literal, so a
+    problem whose archive is named anything else still gets a correctly named
+    checksum beside it (decision Q15 and the plan's open item on
+    ``test_cases.zip``).
+    """
+    return f"{archive_name}{CHECKSUM_SUFFIX}"
+
+
+def case_data_checksum_name(archive_name: str) -> str:
+    """The checksum of the case *data*, named after the declared archive."""
+    return f"{archive_name}.cases{CHECKSUM_SUFFIX}"
+
+
+def case_data_manifest(
+    problem_dir: Path, names: Sequence[str], document: Mapping[str, Any]
+) -> str:
+    """A digest of the *case data*, not of how it was packaged.
+
+    Files are listed first, one ``sha256sum`` line each, sorted by name, so the
+    file verifies with ``sha256sum -c`` from the problem directory and is itself
+    reproducible.
+
+    The grading structure is appended as a ``#`` comment line: the points, batch
+    membership and dependencies are part of what a generator produces, and a
+    generator retuned only in *how it groups cases* leaves every case file -- and
+    therefore the archive -- byte-identical, so neither checksum would move
+    without this.  ``sha256sum -c`` ignores comment lines, so the file still
+    verifies.  ``document`` is required rather than optional: the structure line
+    is what gives this digest its teeth, so a caller cannot quietly produce a
+    weaker one.
+
+    The declared *archive filename* is excluded from the structure: it is how the
+    case data is packaged, which is the one thing this second checksum exists to
+    be independent of (decision Q15).
+    """
+    lines = [f"{sha256_file(problem_dir / name)}  {name}" for name in sorted(names)]
+    structure = {key: value for key, value in document.items() if key != "archive"}
+    # Canonical, sorted-key JSON: the manifest must not depend on PyYAML's mapping
+    # order (it preserves insertion order, which is stable today but is not a
+    # property this checksum should rely on).
+    canonical = json.dumps(structure, sort_keys=True, separators=(",", ":"))
+    lines.append(f"# {sha256_of(canonical)}  init.yml")
+    return "".join(f"{line}\n" for line in lines)
+
+
+def sha256_of(text: str) -> str:
+    """The SHA-256 of a UTF-8 string's bytes."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def write_checksums(
+    problem_dir: Path, archive_name: str, names: Sequence[str], document: Mapping[str, Any]
+) -> tuple[Path, Path]:
+    """Write both committed checksums beside the archive; return their paths.
+
+    The first ties the packaged artifact to the committed source; the second
+    records the cases independently of how they were packaged (decision Q15).
+
+    Written only after a successful archive build, so each describes the last
+    *successful* build.  A later failure that discards the archive -- ``outputs``
+    removes it whenever a rebuild breaks, because DMOJ reads answers out of it --
+    therefore leaves these two files describing the archive that used to be
+    there.  That is deliberate: they are the committed record of what the
+    generator produced, and deleting them on a failure would lose the evidence
+    ``regenerate --check`` (decision Q22) compares against.
+    """
+    archive_checksum = problem_dir / archive_checksum_name(archive_name)
+    case_checksum = problem_dir / case_data_checksum_name(archive_name)
+    archive_checksum.write_text(
+        f"{sha256_file(problem_dir / archive_name)}  {archive_name}\n", encoding="utf-8"
+    )
+    case_checksum.write_text(
+        case_data_manifest(problem_dir, names, document), encoding="utf-8"
+    )
+    return archive_checksum, case_checksum
+
+
 def run_archive(problem: str) -> int:
-    problem_dir = Path.cwd() / problem
+    problem_dir = judges.resolve_problem(problem)
     init_path = problem_dir / INIT_FILENAME
     document = load_init(problem_dir)
     archive_name = document.get("archive")
@@ -679,10 +833,13 @@ def run_archive(problem: str) -> int:
         )
 
     archive_path = problem_dir / archive_name
-    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
-        for name in names:
-            archive.write(problem_dir / name, arcname=name)
+    write_reproducible_zip(archive_path, [(name, problem_dir / name) for name in names])
+    archive_checksum, case_checksum = write_checksums(
+        problem_dir, archive_name, names, document
+    )
     print(f"{archive_path}: {len(names)} members")
+    print(f"{archive_checksum}: sha256 of the archive")
+    print(f"{case_checksum}: sha256 of the case data")
     return 0
 
 
