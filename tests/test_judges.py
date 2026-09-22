@@ -12,6 +12,7 @@ round-trip.
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -324,3 +325,175 @@ def test_stop_removes_autostopped_containers_too(monkeypatch, capsys) -> None:
         f"{judges.NAME_PREFIX}3",
     ]
     assert len(capsys.readouterr().out.strip().splitlines()) == 3
+
+
+# ---------------------------------------------------------------------------
+# The mounted root, read back from the container
+# ---------------------------------------------------------------------------
+
+#: A fake ``podman inspect``: it answers the state query and the mount query
+#: differently, the way the real one does, so a test can drive both without
+#: caring which order :func:`judges.require_mount` asks in.
+def fake_inspect(monkeypatch, *, state: str | None, mount: Path | None) -> list[list[str]]:
+    """Install a ``_capture`` that reports ``state`` and ``mount``; return calls."""
+    calls: list[list[str]] = []
+
+    def capture(args: list[str]) -> subprocess.CompletedProcess:
+        calls.append(args)
+        if args[:2] == ["podman", "ps"]:
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if state is None:
+            return subprocess.CompletedProcess(args, 125, "", "no such container")
+        if judges._MOUNT_SOURCE_FORMAT in args:
+            source = "" if mount is None else str(mount)
+            return subprocess.CompletedProcess(args, 0, source, "")
+        return subprocess.CompletedProcess(args, 0, state, "")
+
+    monkeypatch.setattr(judges, "_capture", capture)
+    return calls
+
+
+def test_the_mounted_root_is_read_back_from_the_container(monkeypatch) -> None:
+    """Not from anything the toolkit wrote down (decision Q23)."""
+    fake_inspect(monkeypatch, state="running", mount=Path("/srv/otro/problems"))
+    assert judges.container_mount("polijuez-judge-1") == Path("/srv/otro/problems").resolve()
+    # The format asks for the mount whose destination is the problems mount, so
+    # an unrelated bind mount cannot be mistaken for it.
+    assert judges.PROBLEMS_MOUNT in judges._MOUNT_SOURCE_FORMAT
+    assert ".Destination" in judges._MOUNT_SOURCE_FORMAT
+
+
+def test_a_container_with_no_mount_at_problems_reports_none(monkeypatch) -> None:
+    fake_inspect(monkeypatch, state="running", mount=None)
+    assert judges.container_mount("polijuez-judge-1") is None
+
+
+def test_a_missing_container_has_no_mounted_root(monkeypatch) -> None:
+    fake_inspect(monkeypatch, state=None, mount=None)
+    assert judges.container_mount("polijuez-judge-99") is None
+
+
+def test_a_pool_on_the_same_root_is_still_adopted(tmp_path, monkeypatch) -> None:
+    """"Already running does not double-start" survives the identity check."""
+    fake_inspect(monkeypatch, state="running", mount=tmp_path)
+    monkeypatch.setattr(
+        judges,
+        "launch_container",
+        lambda *args, **kwargs: pytest.fail("a matching container must not be re-created"),
+    )
+    assert judges.start_container(1, tmp_path, tmp_path / "judge.yml") == "running"
+
+
+def test_a_pool_on_a_different_root_is_refused_naming_both(
+    tmp_path, monkeypatch
+) -> None:
+    """The silent wrong-grade this ticket exists to stop."""
+    mine = tmp_path / "mine" / "problems"
+    theirs = tmp_path / "theirs" / "problems"
+    fake_inspect(monkeypatch, state="running", mount=theirs)
+    monkeypatch.setattr(
+        judges,
+        "launch_container",
+        lambda *args, **kwargs: pytest.fail("a foreign container must not be replaced"),
+    )
+    with pytest.raises(JudgeError) as excinfo:
+        judges.start_container(1, mine, tmp_path / "judge.yml")
+    message = str(excinfo.value)
+    assert str(mine.resolve()) in message
+    assert str(theirs.resolve()) in message
+    assert "judges stop" in message
+
+
+def test_a_container_with_no_problems_mount_is_refused_too(tmp_path, monkeypatch) -> None:
+    """A hand-made container is not adoptable either; the refusal says why."""
+    mine = tmp_path / "mine"
+    fake_inspect(monkeypatch, state="running", mount=None)
+    with pytest.raises(JudgeError) as excinfo:
+        judges.start_container(1, mine, tmp_path / "judge.yml")
+    message = str(excinfo.value)
+    assert str(mine.resolve()) in message
+    assert "no /problems mount" in message
+    assert "judges stop" in message
+
+
+def test_require_mount_lets_a_matching_container_through(tmp_path, monkeypatch) -> None:
+    fake_inspect(monkeypatch, state="running", mount=tmp_path)
+    assert judges.require_mount("polijuez-judge-1", tmp_path) is None
+
+
+def test_require_mount_accepts_a_symlinked_root(tmp_path, monkeypatch) -> None:
+    """The comparison is on resolved paths, not on spellings."""
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    fake_inspect(monkeypatch, state="running", mount=real)
+    assert judges.require_mount("polijuez-judge-1", link) is None
+
+
+def test_require_mount_is_silent_about_a_container_that_does_not_exist(
+    tmp_path, monkeypatch
+) -> None:
+    """Nothing to adopt means nothing to refuse; the caller starts one instead."""
+    fake_inspect(monkeypatch, state=None, mount=None)
+    assert judges.require_mount("polijuez-judge-1", tmp_path) is None
+
+
+def test_submit_refuses_to_grade_through_a_foreign_pool(tmp_path, monkeypatch) -> None:
+    """Every grading path funnels through ``submit``, so the check lives there too.
+
+    ``verify`` and ``stress`` reuse a *running* container rather than starting
+    one (``_running_container``, ``containers``), so the refusal cannot be only
+    in ``start_container``.
+    """
+    theirs = tmp_path / "theirs"
+    theirs.mkdir()
+    fake_inspect(monkeypatch, state="running", mount=theirs)
+    monkeypatch.setattr(
+        judges,
+        "run_command",
+        lambda *args, **kwargs: pytest.fail("nothing may be sent to a foreign pool"),
+    )
+    source = theirs / "solution.cpp"
+    source.write_text("int main(){}\n", encoding="utf-8")
+    with pytest.raises(JudgeError) as excinfo:
+        judges.submit(
+            "polijuez-judge-1",
+            "suma",
+            "CPP17",
+            source,
+            time_limit=1.0,
+            memory_limit=262144,
+            problems_root=tmp_path / "mine",
+        )
+    message = str(excinfo.value)
+    assert str((tmp_path / "mine").resolve()) in message
+    assert str(theirs.resolve()) in message
+
+
+def test_status_reports_the_root_each_container_is_mounted_on(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """So the mismatch is visible before a grading command is attempted."""
+    mine = tmp_path / "mine"
+    theirs = tmp_path / "theirs"
+    output = f"{judges.NAME_PREFIX}1 running\n"
+    mounts = {
+        f"{judges.NAME_PREFIX}1": str(theirs),
+    }
+
+    def capture(args: list[str]) -> subprocess.CompletedProcess:
+        if args[:2] == ["podman", "ps"]:
+            return subprocess.CompletedProcess(args, 0, output, "")
+        if judges._MOUNT_SOURCE_FORMAT in args:
+            return subprocess.CompletedProcess(args, 0, mounts.get(args[2], ""), "")
+        return subprocess.CompletedProcess(args, 0, "running", "")
+
+    monkeypatch.setattr(judges, "_capture", capture)
+    monkeypatch.setattr(judges, "image_exists", lambda image=judges.IMAGE: True)
+    assert judges._action_status(type("A", (), {"count": 1})()) == 0
+    printed = capsys.readouterr().out
+    assert str(theirs.resolve()) in printed
+    assert str(mine.resolve()) not in printed
+    containers, _ = judges.pool_status(1)
+    assert containers == [(f"{judges.NAME_PREFIX}1", "running", theirs.resolve())]

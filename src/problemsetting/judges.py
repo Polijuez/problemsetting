@@ -26,6 +26,12 @@ command at a time and streams the output back.  Grading is therefore
 * the **toolkit** re-discovers problems after regenerating cases by POSTing to
   the judge's ``/update/problems`` control endpoint (decision Q28) rather than
   restarting containers.
+
+A pool is only ever adopted by a run whose problems root is the one it already
+mounts: the mounted root is read back from the running container itself
+(``podman inspect``), never from anything the toolkit wrote down, so a container
+belonging to another problemset repo is refused instead of silently grading
+against the wrong problems (decision Q23).  See :func:`require_mount`.
 """
 
 from __future__ import annotations
@@ -449,6 +455,76 @@ def running_containers() -> list[str]:
     return [name for _, name, state in list_containers() if state == "running"]
 
 
+#: ``podman inspect`` format printing the host source of the bind mount at
+#: :data:`PROBLEMS_MOUNT`.  Ask for the mount that is actually there rather than
+#: for every mount, so a container with several bind mounts cannot be misread.
+_MOUNT_SOURCE_FORMAT = (
+    "{{range .Mounts}}{{if eq .Destination \""
+    + PROBLEMS_MOUNT
+    + "\"}}{{.Source}}{{end}}{{end}}"
+)
+
+
+def container_mount(name: str) -> Path | None:
+    """The host directory a running container mounts at ``/problems``.
+
+    Read back from **the container itself** with ``podman inspect`` (decision
+    Q23), never from the config the toolkit generated: the generated config
+    describes the pool we *meant* to start, while ``podman inspect`` describes
+    the pool that is actually running, so the check cannot drift out of sync with
+    reality -- a container started by an older toolkit, or by hand, is seen as it
+    is.  None when the container does not exist, is not running, or has no mount
+    at :data:`PROBLEMS_MOUNT`.
+    """
+    result = _capture(["podman", "inspect", name, "--format", _MOUNT_SOURCE_FORMAT])
+    if result.returncode != 0:
+        return None
+    source = result.stdout.strip()
+    if not source:
+        return None
+    # `inspect` reports the source path as podman recorded it, which for a bind
+    # mount is the absolute host path; resolve both sides before comparing so a
+    # symlinked or non-normalized problems root is still recognized as itself.
+    return Path(source).resolve()
+
+
+def pool_mount_message(name: str, expected: Path, actual: Path | None) -> str:
+    """The refusal for adopting a container whose mount is not ``expected``.
+
+    Both roots are named because either one alone leaves the reader guessing:
+    the expected root says where *this* command meant to grade, and the actual
+    one says which repository's problems a verdict would in fact have come from.
+    The remedy is spelled out because the default pool is otherwise reused
+    silently, so the mismatch is invisible until this error.
+    """
+    mounted = f"is mounted on {actual}" if actual is not None else f"has no {PROBLEMS_MOUNT} mount"
+    return (
+        f"judge container {name} already exists but must not be reused: this "
+        f"command grades against {expected}, while {name} {mounted}.  A verdict "
+        f"from it would describe a different set of problems.  Stop the foreign "
+        f"pool and start one for this root: 'problemsetting judges stop', then "
+        f"'problemsetting judges start'."
+    )
+
+
+def require_mount(name: str, problems_root: Path) -> None:
+    """Refuse ``name`` unless it mounts ``problems_root`` at ``/problems``.
+
+    The check :func:`start_container` performs before adopting a running
+    container; also callable directly by a caller that already has a container
+    name and wants the same guarantee.  Only a *running* container is judged:
+    one that does not exist has nothing to adopt, and one that is merely stopped
+    is not serving anybody and is reported as "not running" by
+    :func:`require_running` rather than as a mount mismatch.
+    """
+    if container_state(name) != "running":
+        return
+    actual = container_mount(name)
+    if actual == problems_root.resolve():
+        return
+    raise JudgeError(pool_mount_message(name, problems_root.resolve(), actual))
+
+
 # ---------------------------------------------------------------------------
 # The generated judge config
 # ---------------------------------------------------------------------------
@@ -530,10 +606,18 @@ def start_container(
     double-start" true, and it is also why a pool is cheap to leave alone: the
     expensive part is ``listen()``, so a running container is always preferred
     over a fresh one.
+
+    A running container is adopted only when it mounts *this* ``problems_root``
+    (decision Q5): the mount is read back from the container
+    (:func:`container_mount`), so a pool belonging to a different repository is
+    refused loudly instead of grading this repository's submissions against the
+    other repository's problems.  A *stopped* container is removed either way --
+    it is not serving anyone, and its launcher has already run.
     """
     name = container_name(ordinal)
     state = container_state(name)
     if state == "running":
+        require_mount(name, problems_root)
         return "running"
     if state is not None:
         # A stopped container is removed rather than restarted: its launcher has
@@ -673,11 +757,21 @@ def ensure_pool(
     return mount, names, started
 
 
-def pool_status(count: int | None = None) -> tuple[list[tuple[str, str]], int]:
-    """Return ``(running name/state pairs, wanted count)``."""
+def pool_status(count: int | None = None) -> tuple[list[tuple[str, str, Path | None]], int]:
+    """Return ``((name, state, mounted root), wanted count)``.
+
+    The mounted root is read back from each container (:func:`container_mount`),
+    so ``judges status`` shows which repository's problems a pool would grade
+    against -- the mismatch this module refuses to adopt is then visible *before*
+    a grading command is attempted.  It is None for a container that has no
+    ``/problems`` mount at all, which is how a hand-made container looks.
+    """
     wanted = count if count is not None else default_count()
     known = {name: state for _, name, state in list_containers()}
-    return sorted(known.items()), wanted
+    return (
+        sorted((name, state, container_mount(name)) for name, state in known.items()),
+        wanted,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -802,8 +896,16 @@ def submit(
     checkout when the toolkit is itself the problems root.  It is a parameter
     because the source path has to be expressed relative to *that* mount: mapping
     against the wrong root would silently grade a different file.
+
+    The container is checked against that root (:func:`require_mount`) before
+    anything is sent to it.  This is the funnel every grading path goes through
+    -- ``verify`` and ``stress`` reuse a running container rather than starting
+    one -- so a pool that belongs to a different repository is refused here even
+    when nothing asked the pool to start.
     """
-    source_in_container = container_path(source, problems_root)
+    mount = problems_root or _default_problems_root()
+    require_mount(name, mount)
+    source_in_container = container_path(source, mount)
     command = (
         f"submit {problem} {executor} {source_in_container} "
         f"-tl {time_limit:g} -ml {int(memory_limit)}"
@@ -1215,8 +1317,12 @@ def _action_status(args) -> int:
     containers, wanted = pool_status(args.count)
     if not containers:
         print(f"no judge containers (a pool of {wanted} would be started by `judges start`)")
-    for name, state in containers:
-        print(f"  {name}  {state}")
+    for name, state, mount in containers:
+        # The mount is spelled out rather than folded into the state column: it
+        # is what explains a refusal ("this pool belongs to another repository"),
+        # and it is a full path.
+        where = mount if mount is not None else "(no /problems mount)"
+        print(f"  {name}  {state}  mounted on {where}")
     print(f"image  {IMAGE}  {'present' if image_exists() else 'MISSING'}")
     return 0
 
