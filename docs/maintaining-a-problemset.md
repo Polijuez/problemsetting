@@ -34,7 +34,7 @@ $ cd problemset
 $ git submodule update --init --recursive
 Submodule 'vendor/problemsetting' (https://github.com/Polijuez/problemsetting) registered for path 'vendor/problemsetting'
 Cloning into 'problemset/vendor/problemsetting'...
-Submodule path 'vendor/problemsetting': checked out 'fa99dd6fb775a4fb3ef0c5e9e7e13caf8ea8b0a2'
+Submodule path 'vendor/problemsetting': checked out '6f1d5601f1d0d5362846109fde16024f9a23806a'
 Submodule 'vendor/judge-server' (https://github.com/DMOJ/judge-server.git) registered for path 'vendor/problemsetting/vendor/judge-server'
 Cloning into 'problemset/vendor/problemsetting/vendor/judge-server'...
 Submodule path 'vendor/problemsetting/vendor/judge-server': checked out '5ef74c5d6cad9efb2e86a5bb8ff2c90aaa6e435c'
@@ -62,14 +62,14 @@ commit viaja como `java_sandbox.jar` y no como *gitlink*), así que eso es lo qu
 ### El pin del submódulo todavía necesita un push
 
 El submódulo nombra una **revisión pública** del toolkit, no una ruta local.  En
-este momento el pin apunta a `fa99dd6`, un commit que **no está publicado**: el
+este momento el pin apunta a `6f1d560`, un commit que **no está publicado**: el
 toolkit local está 5 commits adelante de `origin/master` y esos commits no se
 han empujado.  Por eso, hoy, un clon desde el remoto público falla:
 
 ```console
 $ git submodule update --init --recursive
-fatal: remote error: upload-pack: not our ref fa99dd6fb775a4fb3ef0c5e9e7e13caf8ea8b0a2
-fatal: Fetched in submodule path 'vendor/problemsetting', but it did not contain fa99dd6fb775a4fb3ef0c5e9e7e13caf8ea8b0a2. Direct fetching of that commit failed.
+fatal: remote error: upload-pack: not our ref 6f1d5601f1d0d5362846109fde16024f9a23806a
+fatal: Fetched in submodule path 'vendor/problemsetting', but it did not contain 6f1d5601f1d0d5362846109fde16024f9a23806a. Direct fetching of that commit failed.
 ```
 
 **Remedio:** los commits del toolkit que el pin referencia tienen que estar
@@ -474,7 +474,7 @@ error: the vendored judge-server is missing or empty at /.../vendor/problemsetti
 ```
 
 El texto exacto del error depende del commit del toolkit que estés usando.  El
-pin de los repositorios actuales (`fa99dd6`) imprime, con el mismo espíritu pero
+pin de los repositorios actuales (`6f1d560`) imprime, con el mismo espíritu pero
 otro comando:
 
 ```console
