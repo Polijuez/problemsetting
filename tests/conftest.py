@@ -21,7 +21,10 @@ visible -- so a test's outcome depends on the test, not on the shell.
 from __future__ import annotations
 
 import os
+import shutil
+import tempfile
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -34,11 +37,35 @@ ROOT_ENV_VARS = (judges.PROBLEMS_ROOT_ENV, "PROBLEMSETTING_ROOT")
 
 @pytest.fixture(scope="session", autouse=True)
 def hermetic_roots() -> Iterator[None]:
-    """Run the whole suite as if neither root had been configured in the shell."""
-    saved = {variable: os.environ.pop(variable, None) for variable in ROOT_ENV_VARS}
+    """Run the whole suite as if no root had been configured, nor a repo entered.
+
+    Removing the two environment variables is not enough, because neither is the
+    first thing the problems root consults: **detection is**, and detection walks
+    up from the current directory looking for the vendoring signature (a
+    ``problems/`` directory beside ``vendor/problemsetting/``).  Running this
+    suite from a checkout of the package with the working directory inside a
+    problemset repo therefore makes every test resolve *that* repo's problems
+    root, no matter what ``PROBLEMSETTING_ROOT`` says.  Measured: with cwd in a
+    problemset repo, ``problems_root()`` returned that repo's ``problems/`` while
+    ``PROBLEMSETTING_ROOT`` pointed elsewhere, and
+    ``test_container_path_maps_under_the_mount`` failed for exactly that reason
+    -- a test whose outcome depended on where the suite was launched from.
+
+    So the suite also runs from a directory with no problemset structure above
+    it.  ``tmp_path_factory`` is not usable at session scope before the first
+    test, so the directory is made here and removed at teardown.
+    """
+    saved_env = {variable: os.environ.pop(variable, None) for variable in ROOT_ENV_VARS}
+    saved_cwd = os.getcwd()
+    # Under the system temp dir, which is above neither the toolkit nor a
+    # problemset repo, and holds no `problems/` marker of its own.
+    neutral = Path(tempfile.mkdtemp(prefix="problemsetting-suite-"))
+    os.chdir(neutral)
     try:
         yield
     finally:
-        for variable, value in saved.items():
+        os.chdir(saved_cwd)
+        shutil.rmtree(neutral, ignore_errors=True)
+        for variable, value in saved_env.items():
             if value is not None:
                 os.environ[variable] = value
