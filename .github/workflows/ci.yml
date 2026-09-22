@@ -12,9 +12,9 @@
 # push.  No scheduled full-judge job exists by design.
 #
 # No secrets, no SSH keys, no deployment host paths: this job installs its tools
-# and builds problems, nothing else.  (Deploy is out of scope entirely, decision
-# Q4; the sibling repos' `deploy.yml` files are not a model to copy -- the one in
-# `problemashaskell` deploys a different repo's problem set.)
+# and builds problems, nothing else.  Deploy is out of scope entirely (decision
+# Q4) -- this repository ships no deploy workflow, and the `deploy.yml` files in
+# the sibling repos are not a model for this one.
 name: CI
 
 on:
