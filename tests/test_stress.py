@@ -409,7 +409,7 @@ class FakePool:
         self.disagreements: set[int] = set()
         self.calls: list[tuple[str, str, str]] = []
 
-    def submit(self, name, problem, executor, source, *, time_limit, memory_limit):
+    def submit(self, name, problem, executor, source, *, time_limit, memory_limit, **_):
         self.calls.append((name, problem, executor))
         assert source.is_file(), source
         # Both passes name the same scratch problem's cases, so one table answers
@@ -529,7 +529,7 @@ def test_a_model_solution_that_does_not_answer_a_case_is_reported(
 ) -> None:
     """The answers are the reference; a case without one must not be silently skipped."""
 
-    def submit(name, problem_, executor, source, *, time_limit, memory_limit):
+    def submit(name, problem_, executor, source, *, time_limit, memory_limit, **_):
         raw = f"Test case  1 AC [0.001s (0.001s wall) | 3000kb] (stress-out:1:{encode('0\n')}) "
         return judges.parse_grading(raw, 0)
 

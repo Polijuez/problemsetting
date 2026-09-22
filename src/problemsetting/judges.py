@@ -124,8 +124,25 @@ def image_exists(image: str = IMAGE) -> bool:
     return result.returncode == 0
 
 
-def repository_root() -> Path:
+#: Environment override naming the problems root outright (decision Q6).  It wins
+#: over detection, so a script can point at a problems tree from anywhere.
+PROBLEMS_ROOT_ENV = "PROBLEMS_ROOT"
+
+#: The directory holding a problemset repo's problems.  Beside
+#: :data:`VENDORED_TOOLKIT` it is the vendoring signature detection walks up for.
+PROBLEMS_DIRNAME = "problems"
+
+#: The vendored toolkit's own path inside a problemset repo.  `problems/` and this
+#: together mean "this directory is a problemset repo" -- neither alone does.
+VENDORED_TOOLKIT = Path("vendor") / "problemsetting"
+
+
+def toolkit_root() -> Path:
     """The toolkit's own checkout -- the directory holding ``vendor/``.
+
+    This is where the judge image is built from, so it is the root that
+    ``vendor/judge-server`` is resolved against; it is **not** the directory
+    mounted at ``/problems`` (see :func:`problems_root`).
 
     Prefers this toolkit's worktree, because ``git submodule`` state only exists
     there: an installed copy of the package (decision Q2 makes it a pinned ``uv``
@@ -145,6 +162,125 @@ def repository_root() -> Path:
         "installed package).  The judge image is built from its vendor/judge-server "
         "submodule, which only exists in a checkout: set PROBLEMSETTING_ROOT to it"
     )
+
+
+def repository_root() -> Path:
+    """Historical name for :func:`toolkit_root`, kept for existing callers.
+
+    It has always meant the toolkit checkout, and the build paths and the tests
+    still call it that way; new code should say which root it means.
+    """
+    return toolkit_root()
+
+
+def problemset_root(start: Path | None = None) -> Path | None:
+    """The problemset repo at or above ``start`` (default: cwd), or None.
+
+    Detection is the vendoring signature rather than a guess: a directory holding
+    **both** ``problems/`` and ``vendor/problemsetting/`` is a problemset repo
+    (decision Q6).  Either marker alone is too common to mean anything -- the
+    toolkit's own checkout holds ``vendor/`` but no ``problems/``.
+    """
+    here = (start or Path.cwd()).resolve()
+    for candidate in (here, *here.parents):
+        if (candidate / PROBLEMS_DIRNAME).is_dir() and (candidate / VENDORED_TOOLKIT).is_dir():
+            return candidate
+    return None
+
+
+def problems_root() -> Path:
+    """The host directory bind-mounted at ``/problems``.
+
+    Every gradeable problem and artifact has to live under it, and it is *not*
+    the toolkit root in general -- a problemset repo mounts ``<repo>/problems``,
+    so the toolkit and its vendored judge-server are structurally out of reach
+    (decision Q1).  Three sources, in order (decision Q6):
+
+    1. ``PROBLEMS_ROOT``, when set: named outright.
+    2. Detection: a cwd inside a problemset repo uses that repo's ``problems/``.
+    3. Otherwise the toolkit root -- the one case where the toolkit *is* the
+       problems root, which is how the toolkit's own tests and problems work.
+    """
+    override = problems_root_override()
+    if override is not None:
+        return override
+    detected = problemset_root()
+    if detected is not None:
+        return (detected / PROBLEMS_DIRNAME).resolve()
+    return toolkit_root()
+
+
+def problems_root_override() -> Path | None:
+    """``PROBLEMS_ROOT`` resolved, or None when it is unset.
+
+    The explicit half of :func:`problems_root`, named so a caller that needs to
+    *distinguish* "the author said where problems live" from "we guessed" can ask
+    without re-reading the environment.
+    """
+    override = os.environ.get(PROBLEMS_ROOT_ENV)
+    return Path(override).resolve() if override else None
+
+
+def _default_problems_root() -> Path:
+    """:func:`problems_root`, under a name a ``problems_root`` parameter cannot shadow.
+
+    Every caller that needs the default also takes a ``problems_root`` argument,
+    so the resolver itself has to be reachable by another name from inside them.
+    """
+    return problems_root()
+
+
+def resolve_problem(problem: str, *, root: Path | None = None) -> Path:
+    """The directory a problem argument names, or an error naming where we looked.
+
+    Two forms are accepted, because both read naturally from a problemset repo
+    root: ``<problem>``, resolved against the problems root, and a path such as
+    ``problems/<problem>``, resolved against cwd like every other path.  A bare
+    name that exists relative to cwd wins -- that is the behaviour every existing
+    caller relies on -- but a bare name that exists in **both** places and is not
+    the same directory is refused rather than silently resolving to one of them.
+
+    "Is this a path or a bare name?" is decided on the argument as typed, not on
+    ``Path``'s normalised parts: ``Path('./suma').parts`` is ``('suma',)``, so a
+    parts-based test would treat an explicitly prefixed path as a bare name and
+    could refuse it as ambiguous -- exactly when the author had already said which
+    one they meant.
+    """
+    root = root if root is not None else problems_root()
+    given = Path(problem)
+    cwd_candidate = Path.cwd() / given
+    if _is_path(problem):
+        # A path, not a bare name: resolved against cwd exactly as before.
+        return cwd_candidate
+    root_candidate = root / given
+    in_cwd = cwd_candidate.exists()
+    in_root = root_candidate.exists()
+    if in_cwd and in_root and cwd_candidate.resolve() != root_candidate.resolve():
+        raise JudgeError(
+            f"{problem!r} names two different directories: {cwd_candidate} and "
+            f"{root_candidate}.  The problems root is {root}; pass the path you mean"
+        )
+    if in_cwd:
+        return cwd_candidate
+    if in_root:
+        return root_candidate
+    raise JudgeError(
+        f"no problem named {problem!r}: looked for {cwd_candidate} and {root_candidate} "
+        f"(the problems root is {root})"
+    )
+
+
+def _is_path(problem: str) -> bool:
+    """Whether the argument was given as a path rather than as a bare problem name.
+
+    Anything carrying a separator, and the two dot-directories, is a path a caller
+    spelled out on purpose; only a single plain component is a name to look up
+    under the problems root as well.
+    """
+    if problem in (os.curdir, os.pardir):
+        return True
+    separators = {os.sep} | ({os.altsep} if os.altsep else set())
+    return any(separator in problem for separator in separators)
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +519,7 @@ def _container_command() -> str:
 
 def start_container(
     ordinal: int,
-    root: Path,
+    problems_root: Path,
     config: Path,
     *,
     idle_timeout: int = DEFAULT_IDLE_TIMEOUT,
@@ -407,7 +543,7 @@ def start_container(
 
     launch_container(
         name,
-        problems_root=root,
+        problems_root=problems_root,
         config=config,
         idle_timeout=idle_timeout,
     )
@@ -504,28 +640,37 @@ def ensure_pool(
     count: int | None = None,
     *,
     root: Path | None = None,
+    problems_root: Path | None = None,
     idle_timeout: int = DEFAULT_IDLE_TIMEOUT,
 ) -> tuple[Path, list[str], list[str]]:
-    """Make sure ``count`` containers are running; return root, names, started.
+    """Make sure ``count`` containers are running; return problems root, names, started.
 
     The image is built first if absent, so ``judges start`` is the single command
     that takes a bare checkout to a working pool.
+
+    ``root`` is the **toolkit** root the image is built from; ``problems_root`` is
+    the directory mounted at ``/problems``.  They are separate because a problemset
+    repo mounts only its ``problems/`` (decision Q1), so the toolkit and its
+    vendored judge-server are never visible to the containers; when neither is
+    given, each is resolved by its own rule (:func:`toolkit_root`,
+    :func:`problems_root`).
     """
-    root = root or repository_root()
-    ensure_image(root)
+    toolkit = root or toolkit_root()
+    mount = _default_problems_root() if problems_root is None else problems_root
+    ensure_image(toolkit)
     wanted = count if count is not None else default_count()
     if wanted < 1:
         raise JudgeError(f"pool size must be at least 1, got {wanted}")
-    config = write_config(pool_dir(root) / "judge.yml")
+    config = write_config(pool_dir(mount) / "judge.yml")
 
     started, names = [], []
     for ordinal in range(1, wanted + 1):
         name = container_name(ordinal)
-        outcome = start_container(ordinal, root, config, idle_timeout=idle_timeout)
+        outcome = start_container(ordinal, mount, config, idle_timeout=idle_timeout)
         names.append(name)
         if outcome == "started":
             started.append(name)
-    return root, names, started
+    return mount, names, started
 
 
 def pool_status(count: int | None = None) -> tuple[list[tuple[str, str]], int]:
@@ -653,9 +798,10 @@ def submit(
     are passed through unchanged and never converted.
 
     ``problems_root`` is the host directory mounted at ``/problems`` -- the
-    toolkit checkout for a normal pool.  It is a parameter because the source
-    path has to be expressed relative to *that* mount: mapping against the wrong
-    root would silently grade a different file.
+    problemset repo's ``problems/`` for a normal pool, and only the toolkit
+    checkout when the toolkit is itself the problems root.  It is a parameter
+    because the source path has to be expressed relative to *that* mount: mapping
+    against the wrong root would silently grade a different file.
     """
     source_in_container = container_path(source, problems_root)
     command = (
@@ -673,7 +819,7 @@ def submit(
 
 def container_path(source: Path, problems_root: Path | None = None) -> str:
     """Map a host path under the mounted root to its ``/problems/...`` path."""
-    problems_root = problems_root or repository_root()
+    problems_root = problems_root or _default_problems_root()
     try:
         relative = source.resolve().relative_to(problems_root.resolve())
     except ValueError:

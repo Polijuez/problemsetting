@@ -1026,8 +1026,22 @@ def run(args: argparse.Namespace) -> int:
     return run_verify(args.problem)
 
 
-def grade_entry(name: str, problem_dir: Path, entry: Entry, plans: Sequence[BatchPlan]) -> Report:
-    """Grade one declared submission through the pool and read the run."""
+def grade_entry(
+    name: str,
+    problem_dir: Path,
+    entry: Entry,
+    plans: Sequence[BatchPlan],
+    *,
+    problems_root: Path | None = None,
+) -> Report:
+    """Grade one declared submission through the pool and read the run.
+
+    ``problems_root`` is the host directory mounted at ``/problems`` -- the
+    problemset repo's ``problems/`` when the problem lives in one.  It is threaded
+    through because the source path is expressed relative to *that* mount, and
+    mapping against the toolkit checkout instead would silently grade a
+    different file (or refuse a problem that is perfectly gradeable).
+    """
     grading = judges.submit(
         name,
         problem_dir.name,
@@ -1035,6 +1049,7 @@ def grade_entry(name: str, problem_dir: Path, entry: Entry, plans: Sequence[Batc
         entry.path,
         time_limit=entry.limits.time,
         memory_limit=entry.limits.memory,
+        problems_root=problems_root,
     )
     # A run that produced no result is not a result.  Raising here keeps an
     # infrastructure failure (a timed-out command, a dead container, a rejected
@@ -1063,12 +1078,13 @@ def grade_entry(name: str, problem_dir: Path, entry: Entry, plans: Sequence[Batc
 
 
 def run_verify(problem: str) -> int:
-    problem_dir = Path.cwd() / problem
+    problem_dir = judges.resolve_problem(problem)
+    problems_root = judges.problems_root()
     _, resolved = meta_mod.load(problem_dir)
     entries = load_manifest(problem_dir, resolved)
     plans = batch_plans(problem_dir)
 
-    name = _running_container()
+    name = _running_container(problems_root)
     # Decision Q28: a problem rebuilt after the judge booted is re-discovered
     # rather than needing the container restarted.
     judges.update_problems(name)
@@ -1078,7 +1094,7 @@ def run_verify(problem: str) -> int:
     mismatched: list[Report] = []
     reports: list[Report] = []
     for entry in entries:
-        report = grade_entry(name, problem_dir, entry, plans)
+        report = grade_entry(name, problem_dir, entry, plans, problems_root=problems_root)
         reports.append(report)
         _print_entry(report, width, entry.index)
         if not entry.declares_expectation:
@@ -1143,17 +1159,21 @@ def _print_failures(checks: Sequence[Check], mismatched: Sequence[Report], width
             print(f"  {report.source_name:<{width}}  expected {expected}  |  actual {actual}")
 
 
-def _running_container() -> str:
+def _running_container(problems_root: Path | None = None) -> str:
     """A running pool container, starting one if the pool is empty.
 
     ``verify`` is the command that answers "is this problem correct?", so needing
     a second command first would defeat it.  This is the same pool
     ``problemsetting judges`` manages, and it is reused when it is already up.
+
+    A pool started here mounts ``problems_root`` at ``/problems`` -- the
+    problemset repo's own ``problems/`` when verify runs inside one, so the
+    problem being graded is the one the judge can actually see.
     """
     if running := judges.running_containers():
         return running[0]
     print("no judge container is running; starting one (discovery takes a minute)")
-    _, names, _ = judges.ensure_pool(1)
+    _, names, _ = judges.ensure_pool(1, problems_root=problems_root)
     name = names[0]
     if not judges.wait_ready(name):
         raise VerifyError(

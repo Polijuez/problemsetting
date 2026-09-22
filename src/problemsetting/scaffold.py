@@ -8,6 +8,7 @@ from pathlib import Path
 
 import yaml
 
+from . import judges
 from . import meta as meta_mod
 from . import templates
 from .commands import Command, register
@@ -36,9 +37,39 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def destination_for(name: str) -> Path:
+    """Where ``new`` should put ``name``: the problems root, or cwd (decision Q14).
+
+    Run at a problemset repo root, a problem belongs under that repo's
+    ``problems/`` -- which is the directory the pool mounts, so it is where every
+    gradeable problem has to live.  Anywhere else the author is working in a
+    plain directory (a checkout of the toolkit itself, or a scratch tree), and
+    cwd-relative placement is both what they mean and what the tests assert.
+
+    An explicit ``PROBLEMS_ROOT`` names the problems root outright, so ``new``
+    obeys it from anywhere: placing the problem under a detected repo while every
+    other command resolves against the override would create a problem nobody can
+    then grade.
+
+    The two places that count as "at the repo root" are the repo root itself and
+    its ``problems/`` directory: both read as "this is where problems go".  A cwd
+    deeper inside the tree is left alone rather than silently teleported.
+    """
+    override = judges.problems_root_override()
+    if override is not None:
+        return override / name
+    detected = judges.problemset_root()
+    if detected is not None:
+        problems = detected / judges.PROBLEMS_DIRNAME
+        cwd = Path.cwd().resolve()
+        if cwd in (detected, problems):
+            return problems / name
+    return Path.cwd() / name
+
+
 def run(args: argparse.Namespace) -> int:
     name = validate_name(args.problem)
-    destination = Path.cwd() / name
+    destination = destination_for(name)
 
     if destination.exists() and not args.force:
         raise ScaffoldError(

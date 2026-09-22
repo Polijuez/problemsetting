@@ -61,6 +61,7 @@ from pathlib import Path
 from typing import Any
 
 from . import cases
+from . import judges
 from . import meta as meta_mod
 from .commands import Command, register
 from .errors import OutputError
@@ -1077,7 +1078,7 @@ def run(args: argparse.Namespace) -> int:
 
 
 def run_outputs(problem: str) -> int:
-    problem_dir = Path.cwd() / problem
+    problem_dir = judges.resolve_problem(problem)
     # meta.yml first, like `cases`: the model decides whether there is anything to
     # compile at all.
     _, resolved = meta_mod.load(problem_dir)

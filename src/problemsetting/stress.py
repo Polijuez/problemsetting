@@ -27,14 +27,16 @@ checker that applies DMOJ's ``standard`` comparison and echoes both outputs when
 they differ.  Both runs are the judge's, the comparison is the judge's, and a
 disagreement arrives with both answers attached.
 
-**Where the scratch problems live.**  The pool mounts the toolkit checkout at
-``/problems``, and DMOJ discovers a problem as ``<root>/<id>/init.yml`` where
-``<root>`` is two directories above each matched ``init.yml`` -- so a scratch
-problem has to be a *direct child of the checkout*, not something under the
-problem being stressed.  It must also never be a dot-directory: ``glob``'s
-recursive walk skips hidden directories, and a problem the judge cannot see fails
-every submission with ``unknown problem``.  The scratch directories are therefore
-``stress-<problem>-<pass><chunk>`` at the checkout root, created before the first
+**Where the scratch problems live.**  The pool mounts the *problems root* at
+``/problems`` -- the problemset repo's ``problems/`` when stress runs inside one,
+and the toolkit checkout only when the toolkit is itself the problems root -- and
+DMOJ discovers a problem as ``<root>/<id>/init.yml`` where ``<root>`` is two
+directories above each matched ``init.yml``.  A scratch problem therefore has to
+be a *direct child of the problems root*, not something under the problem being
+stressed.  It must also never be a dot-directory: ``glob``'s recursive walk skips
+hidden directories, and a problem the judge cannot see fails every submission
+with ``unknown problem``.  The scratch directories are therefore
+``stress-<problem>-<pass><chunk>`` at the problems root, created before the first
 submission and removed in a ``finally``, and the pool is asked to re-discover
 them (``POST /update/problems``, decision Q28) since discovery happens once, at
 container start.
@@ -95,7 +97,7 @@ DEFAULT_CASES = 200
 CASES_DIRNAME = cases_mod.CASES_DIRNAME
 INIT_FILENAME = cases_mod.INIT_FILENAME
 
-#: Prefix of every scratch problem directory.  They live at the checkout root,
+#: Prefix of every scratch problem directory.  They live at the problems root,
 #: which is the one place the pool's mount makes discoverable, so the name is
 #: there to be unmistakable in that listing.
 SCRATCH_PREFIX = "stress-"
@@ -389,7 +391,7 @@ def remove_scratch(directories: Sequence[Path]) -> None:
     """Delete the scratch problems, whatever the run did.
 
     The whole tree, unconditionally: a scratch directory is this run's own creation
-    at the checkout root, and leaving one behind would leave a problem the judge
+    at the problems root, and leaving one behind would leave a problem the judge
     keeps reporting on every later discovery.
     """
     for directory in directories:
@@ -469,7 +471,7 @@ def print_finding(
 # ---------------------------------------------------------------------------
 
 
-def containers(wanted: int) -> list[str]:
+def containers(wanted: int, problems_root: Path) -> list[str]:
     """Running pool containers, starting a pool when there is none.
 
     The pool is shared: a running one is reused rather than added to, which is what
@@ -477,11 +479,17 @@ def containers(wanted: int) -> list[str]:
     and a container that is up has already paid it).  Never more containers than
     the run has chunks for -- a container with an empty chunk would be a submission
     with nothing to grade.
+
+    ``problems_root`` is the directory the pool mounts at ``/problems``; the
+    scratch problems live directly under it, so a pool started here must be the
+    one mounted on it.
     """
     running = judges.running_containers()
     if running:
         return running[: min(len(running), wanted)]
-    names = judges.ensure_pool(min(wanted, judges.default_count()))[1]
+    names = judges.ensure_pool(
+        min(wanted, judges.default_count()), problems_root=problems_root
+    )[1]
     for name in names:
         if not judges.wait_ready(name):
             raise JudgeError(
@@ -523,6 +531,7 @@ def capture_answers(
     directories: Sequence[Path],
     resolved: meta_mod.ResolvedMeta,
     model_source: Path,
+    problems_root: Path,
 ) -> list[list[bytes]]:
     """Pass A: run the model solution per chunk, and keep its answers.
 
@@ -540,6 +549,7 @@ def capture_answers(
             model_source,
             time_limit=resolved.solution_limits.time,
             memory_limit=resolved.solution_limits.memory,
+            problems_root=problems_root,
         )
         if grading.compile_error:
             raise JudgeError(
@@ -577,6 +587,7 @@ def compare(
     offsets: Sequence[int],
     directories: Sequence[Path],
     entry: verify.Entry,
+    problems_root: Path,
 ) -> Disagreement | None:
     """Pass B: run one brute force per chunk, and return the first disagreement.
 
@@ -594,6 +605,7 @@ def compare(
             entry.path,
             time_limit=entry.limits.time,
             memory_limit=entry.limits.memory,
+            problems_root=problems_root,
         )
         if grading.compile_error:
             raise JudgeError(
@@ -650,7 +662,7 @@ def run_stress(
     count: int = DEFAULT_CASES,
     seed: int | None = None,
 ) -> int:
-    problem_dir = Path.cwd() / problem
+    problem_dir = judges.resolve_problem(problem)
     _, resolved = meta_mod.load(problem_dir)
 
     # The one model whose submission is not a stdin/stdout program: an
@@ -694,8 +706,9 @@ def run_stress(
             f"model solution, and meta.yml declares solutionlang: {resolved.solutionlang}"
         )
 
+    root = judges.problems_root()
     inputs = small_cases(generator, seed, count, str(generator_file))
-    names = containers(len(inputs))
+    names = containers(len(inputs), root)
     chunks = split(inputs, len(names))
     offsets: list[int] = []
     start = 0
@@ -703,7 +716,6 @@ def run_stress(
         offsets.append(start)
         start += len(chunk)
     total = start
-    root = judges.repository_root()
     above = [root / scratch_name(problem_dir.name, "a", chunk) for chunk in range(len(chunks))]
     below = [root / scratch_name(problem_dir.name, "b", chunk) for chunk in range(len(chunks))]
 
@@ -732,12 +744,12 @@ def run_stress(
         for name in names:
             judges.update_problems(name)
 
-        answers = capture_answers(names, chunks, above, resolved, model_source)
+        answers = capture_answers(names, chunks, above, resolved, model_source, root)
         for chunk, directory in enumerate(below):
             write_expected(directory, answers[chunk])
 
         for entry in brutes:
-            disagreement = compare(names, chunks, offsets, below, entry)
+            disagreement = compare(names, chunks, offsets, below, entry, root)
             if disagreement is not None:
                 index = disagreement.index
                 chunk = max(position for position, offset in enumerate(offsets) if offset <= index)
