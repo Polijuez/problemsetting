@@ -223,6 +223,121 @@ def test_require_image_raises_with_instructions_when_absent(tmp_path, monkeypatc
     assert "judges build" in str(excinfo.value)
 
 
+# ---------------------------------------------------------------------------
+# The empty vendored judge-server
+# ---------------------------------------------------------------------------
+
+
+def checkout(tmp_path: Path, *, submodule: str = "populated") -> Path:
+    """A toolkit checkout whose vendored judge-server is in ``submodule`` state.
+
+    ``"populated"`` is what ``git submodule update --init --recursive`` leaves:
+    the checkout plus the image build context inside it.  ``"empty"`` is what a
+    plain ``git clone`` leaves: the directory exists and holds zero entries --
+    measured, and the state this ticket exists for.  ``"missing"`` is a checkout
+    with no submodule directory at all.
+    """
+    root = tmp_path / "checkout"
+    if submodule == "missing":
+        return root
+    submodule_dir = root / "vendor" / "judge-server"
+    submodule_dir.mkdir(parents=True)
+    if submodule == "populated":
+        (submodule_dir / ".docker" / "tier3").mkdir(parents=True)
+    return root
+
+
+@pytest.mark.parametrize("state", ["empty", "missing"])
+def test_an_unpopulated_submodule_names_the_directory_and_the_fix(
+    tmp_path: Path, state: str
+) -> None:
+    """Missing and present-but-empty are the same failure with the same fix."""
+    root = checkout(tmp_path, submodule=state)
+    with pytest.raises(JudgeError) as excinfo:
+        judges.require_submodule(root)
+    message = str(excinfo.value)
+    assert str(root / "vendor" / "judge-server") in message
+    assert "git submodule update --init --recursive" in message
+
+
+def test_the_fix_command_is_the_nested_one(tmp_path: Path) -> None:
+    """``--recursive`` is the flag a plain ``update --init`` leaves out."""
+    assert judges.SUBMODULE_INIT_COMMAND == "git submodule update --init --recursive"
+
+
+def test_a_populated_submodule_is_returned(tmp_path: Path) -> None:
+    root = checkout(tmp_path)
+    assert judges.require_submodule(root) == root / "vendor" / "judge-server"
+
+
+def test_build_refuses_before_invoking_podman_on_an_empty_submodule(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The point where the emptiness first matters is the build (decision Q24)."""
+    root = checkout(tmp_path, submodule="empty")
+    monkeypatch.setattr(
+        judges,
+        "_run",
+        lambda *args, **kwargs: pytest.fail("podman must not be reached"),
+    )
+    with pytest.raises(JudgeError, match="git submodule update --init --recursive"):
+        judges.build_image(root)
+
+
+def test_ensure_image_refuses_before_building_when_the_submodule_is_empty(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """``judges start`` is the command most users hit first; it fails the same way."""
+    root = checkout(tmp_path, submodule="empty")
+    monkeypatch.setattr(judges, "image_exists", lambda image=judges.IMAGE: False)
+    monkeypatch.setattr(
+        judges,
+        "build_image",
+        lambda *args, **kwargs: pytest.fail("the build must not start"),
+    )
+    with pytest.raises(JudgeError) as excinfo:
+        judges.ensure_image(root)
+    message = str(excinfo.value)
+    assert str(root / "vendor" / "judge-server") in message
+    assert "git submodule update --init --recursive" in message
+
+
+def test_an_existing_image_needs_no_submodule(tmp_path: Path, monkeypatch) -> None:
+    """The pool runs the image, so a checkout without the submodule still grades."""
+    root = checkout(tmp_path, submodule="empty")
+    monkeypatch.setattr(judges, "image_exists", lambda image=judges.IMAGE: True)
+    assert judges.ensure_image(root) is None
+
+
+def test_a_populated_checkout_still_builds(tmp_path: Path, monkeypatch) -> None:
+    """The guard is transparent when the submodule is there."""
+    root = checkout(tmp_path)
+    calls: list[list[str]] = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(judges, "_run", run)
+    assert judges.build_image(root) == 0
+    assert calls and calls[0][:2] == ["podman", "build"]
+    assert str(root / "vendor" / "judge-server" / ".docker" / "tier3") in calls[0]
+
+
+def test_the_cli_reports_the_empty_submodule_as_an_authoring_error(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """``judges build`` prints the fix, not a traceback or podman's own noise."""
+    from problemsetting import cli
+
+    root = checkout(tmp_path, submodule="empty")
+    monkeypatch.setenv("PROBLEMSETTING_ROOT", str(root))
+    assert cli.main(["judges", "build"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error: ")
+    assert "git submodule update --init --recursive" in err
+
+
 def test_repository_root_honours_the_override(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("PROBLEMSETTING_ROOT", str(tmp_path))
     assert judges.repository_root() == tmp_path.resolve()

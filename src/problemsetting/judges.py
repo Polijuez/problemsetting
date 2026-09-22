@@ -299,6 +299,56 @@ def submodule_dir(root: Path | None = None) -> Path:
     return (root or repository_root()) / "vendor" / "judge-server"
 
 
+#: The command that populates the vendored judge-server, printed by
+#: :func:`submodule_message`.  ``--recursive`` is the part that is easy to leave
+#: out and impossible to work around: ``vendor/judge-server`` is a submodule, and
+#: judge-server vendors a submodule of its own (``dmoj/executors/java_sandbox``,
+#: named in its own ``.gitmodules``), so a plain ``git submodule update --init``
+#: fills the outer path and still leaves the image build without its sandbox.
+SUBMODULE_INIT_COMMAND = "git submodule update --init --recursive"
+
+
+def submodule_message(root: Path) -> str:
+    """The "populate the vendored judge-server" error (decision Q24).
+
+    One message for both states -- missing and present-but-empty -- because the
+    fix is the same command either way, and an *empty* directory is the normal
+    result of a plain ``git clone``: telling the two apart would only invite the
+    reader to hunt for a second cause.
+    """
+    return (
+        f"the vendored judge-server is missing or empty at {submodule_dir(root)}.\n"
+        f"  The judge image is built from it (the build context is its .docker/ "
+        f"directory), so it has to be populated first.\n"
+        f"  Populate it in {root} with:  {SUBMODULE_INIT_COMMAND}\n"
+        f"  --recursive is required: judge-server has a submodule of its own "
+        f"(dmoj/executors/java_sandbox), which the image build needs."
+    )
+
+
+def require_submodule(root: Path | None = None) -> Path:
+    """The populated vendored judge-server checkout, or an error naming the fix.
+
+    Called before anything reads the judge source (:func:`build_image`,
+    :func:`apply_patches`), so an unpopulated submodule fails here with the
+    command that fixes it, instead of from inside a multi-GB podman build --
+    which is where the emptiness used to surface, naming an absent file rather
+    than the empty directory that caused it.  Emptiness is the test, not the
+    presence of a particular file: after a plain ``git clone`` the directory
+    exists and has *zero* entries (the path is defined by the gitlink, the tree
+    comes only from ``git submodule update``), so "missing" and "present but
+    empty" are the same failure with the same fix.
+
+    It is deliberately *not* required when the image already exists: the pool
+    runs the image, so such a checkout grades exactly as it did before.
+    """
+    root = root or repository_root()
+    submodule = submodule_dir(root)
+    if submodule.is_dir() and any(submodule.iterdir()):
+        return submodule
+    raise JudgeError(submodule_message(root))
+
+
 def patches_dir(root: Path | None = None) -> Path:
     """Path of the vendored patches applied before the build."""
     return (root or repository_root()) / "patches"
@@ -339,12 +389,7 @@ def apply_patches(root: Path | None = None) -> list[str]:
     a no-op.
     """
     root = root or repository_root()
-    submodule = submodule_dir(root)
-    if not (submodule / ".docker").is_dir():
-        raise JudgeError(
-            f"the judge-server submodule is not checked out at {submodule}; fetch it with "
-            f"'git submodule update --init --depth 1 vendor/judge-server'"
-        )
+    submodule = require_submodule(root)
     applied = []
     for patch in sorted(patches_dir(root).glob("*.patch")):
         check = _capture(
@@ -364,11 +409,11 @@ def apply_patches(root: Path | None = None) -> list[str]:
 def build_image(root: Path | None = None, *, timeout: float | None = None) -> int:
     """Build the judge image from the submodule.  Returns podman's exit status."""
     root = root or repository_root()
-    context = submodule_dir(root) / ".docker" / "tier3"
+    context = require_submodule(root) / ".docker" / "tier3"
     if not context.is_dir():
         raise JudgeError(
-            f"no image build context at {context}; the judge-server submodule is "
-            f"missing -- fetch it with 'git submodule update --init --depth 1 vendor/judge-server'"
+            f"no image build context at {context}; the vendored judge-server is "
+            f"incomplete -- fetch it with '{SUBMODULE_INIT_COMMAND}'"
         )
     for name in apply_patches(root):
         print(f"applied {name} to the judge-server submodule")
@@ -388,10 +433,17 @@ def build_image(root: Path | None = None, *, timeout: float | None = None) -> in
 
 
 def ensure_image(root: Path | None = None) -> None:
-    """Build the image if it is absent; raise with instructions if that fails."""
+    """Build the image if it is absent; raise with instructions if that fails.
+
+    An image that is already present is all the pool needs, so a checkout whose
+    vendored judge-server was never populated still grades with it; the
+    submodule is required only when the build -- the one step that reads the
+    judge source -- is actually going to run (decision Q24).
+    """
     root = root or repository_root()
     if image_exists():
         return
+    require_submodule(root)
     if build_image(root) != 0:
         raise JudgeError(
             f"building {IMAGE} failed; see podman's output above.  The build context "
