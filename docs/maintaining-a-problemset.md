@@ -61,15 +61,15 @@ commit viaja como `java_sandbox.jar` y no como *gitlink*), así que eso es lo qu
 
 ### El pin del submódulo todavía necesita un push
 
-El submódulo nombra una **revisión pública** del toolkit, no una ruta local.  En
-este momento el pin apunta a `6f1d560`, un commit que **no está publicado**: el
-toolkit local está 5 commits adelante de `origin/master` y esos commits no se
-han empujado.  Por eso, hoy, un clon desde el remoto público falla:
+El submódulo nombra una **revisión pública** del toolkit, no una ruta local.  El
+pin tiene que apuntar a un commit que **esté publicado**: mientras el toolkit
+local tenga commits sin empujar, un commit que solo exista ahí no se puede
+traer desde el remoto público, y un clon falla:
 
 ```console
 $ git submodule update --init --recursive
-fatal: remote error: upload-pack: not our ref 6f1d5601f1d0d5362846109fde16024f9a23806a
-fatal: Fetched in submodule path 'vendor/problemsetting', but it did not contain 6f1d5601f1d0d5362846109fde16024f9a23806a. Direct fetching of that commit failed.
+fatal: remote error: upload-pack: not our ref <sha-del-pin>
+fatal: Fetched in submodule path 'vendor/problemsetting', but it did not contain <sha-del-pin>. Direct fetching of that commit failed.
 ```
 
 **Remedio:** los commits del toolkit que el pin referencia tienen que estar
@@ -473,14 +473,10 @@ error: the vendored judge-server is missing or empty at /.../vendor/problemsetti
   --recursive is required: judge-server has a submodule of its own (dmoj/executors/java_sandbox), which the image build needs.
 ```
 
-El texto exacto del error depende del commit del toolkit que estés usando.  El
-pin de los repositorios actuales (`6f1d560`) imprime, con el mismo espíritu pero
-otro comando:
-
-```console
-$ ./problemsetting judges build
-error: no image build context at /.../vendor/problemsetting/vendor/judge-server/.docker/tier3; the judge-server submodule is missing -- fetch it with 'git submodule update --init --depth 1 vendor/judge-server'
-```
+Ese texto es el que imprime cualquier commit que incluya el chequeo del
+submódulo.  En commits más viejos del toolkit el mismo fallo salía como un
+``no image build context at ...``, que nombraba una ruta en vez del comando: si
+ves ese texto, tu toolkit está viejo y el arreglo es el mismo.
 
 **Arreglo:** correr el `--recursive` en el checkout del toolkit.  Es el comando
 que funciona en ambos commits:

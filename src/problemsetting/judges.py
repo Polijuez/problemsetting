@@ -143,19 +143,15 @@ PROBLEMS_DIRNAME = "problems"
 VENDORED_TOOLKIT = Path("vendor") / "problemsetting"
 
 
-def toolkit_root() -> Path:
-    """The toolkit's own checkout -- the directory holding ``vendor/``.
+def toolkit_root_or_none() -> Path | None:
+    """The toolkit checkout, or None when only an installed copy is present.
 
-    This is where the judge image is built from, so it is the root that
-    ``vendor/judge-server`` is resolved against; it is **not** the directory
-    mounted at ``/problems`` (see :func:`problems_root`).
-
-    Prefers this toolkit's worktree, because ``git submodule`` state only exists
-    there: an installed copy of the package (decision Q2 makes it a pinned ``uv``
-    git dependency of the problem repos) has no ``vendor/`` and no submodule
-    gitlink, so the checkout has to be named explicitly.  ``PROBLEMSETTING_ROOT``
-    is that escape hatch, and it is also what a test uses to point at a fixture
-    tree.
+    The toolkit is consumed two ways (decision Q2): vendored as a submodule,
+    which yields a checkout with ``vendor/judge-server``, or installed as a
+    package, which does not.  A command that only reads and writes problem files
+    does not care which; one that builds the judge image does.  Keeping "which
+    root is this" apart from "there must be one" is what lets the former keep
+    working when the latter cannot.
     """
     override = os.environ.get("PROBLEMSETTING_ROOT")
     if override:
@@ -163,11 +159,28 @@ def toolkit_root() -> Path:
     for parent in Path(__file__).resolve().parents:
         if (parent / "pyproject.toml").is_file() and (parent / "src").is_dir():
             return parent
-    raise JudgeError(
-        "cannot locate the problemsetting checkout (no pyproject.toml above the "
-        "installed package).  The judge image is built from its vendor/judge-server "
-        "submodule, which only exists in a checkout: set PROBLEMSETTING_ROOT to it"
-    )
+    return None
+
+
+def toolkit_root() -> Path:
+    """The toolkit's own checkout -- the directory holding ``vendor/``.
+
+    This is where the judge image is built from, so it is the root that
+    ``vendor/judge-server`` is resolved against; it is **not** the directory
+    mounted at ``/problems`` (see :func:`problems_root`).
+
+    Raises when the toolkit is an installed package with no checkout: the caller
+    asked for a directory holding ``vendor/``, and there is none.  A caller that
+    can work without one asks :func:`toolkit_root_or_none`.
+    """
+    root = toolkit_root_or_none()
+    if root is None:
+        raise JudgeError(
+            "cannot locate the problemsetting checkout (no pyproject.toml above the "
+            "installed package).  The judge image is built from its vendor/judge-server "
+            "submodule, which only exists in a checkout: set PROBLEMSETTING_ROOT to it"
+        )
+    return root
 
 
 def repository_root() -> Path:
@@ -200,12 +213,20 @@ def problems_root() -> Path:
     Every gradeable problem and artifact has to live under it, and it is *not*
     the toolkit root in general -- a problemset repo mounts ``<repo>/problems``,
     so the toolkit and its vendored judge-server are structurally out of reach
-    (decision Q1).  Three sources, in order (decision Q6):
+    (decision Q1).  Four sources, in order (decision Q6):
 
     1. ``PROBLEMS_ROOT``, when set: named outright.
     2. Detection: a cwd inside a problemset repo uses that repo's ``problems/``.
-    3. Otherwise the toolkit root -- the one case where the toolkit *is* the
-       problems root, which is how the toolkit's own tests and problems work.
+    3. Otherwise the toolkit root, when there is a checkout -- the one case where
+       the toolkit *is* the problems root, which is how the toolkit's own tests
+       and problems work.
+    4. Otherwise cwd.  An installed copy of the toolkit has no checkout to fall
+       back to, and before the two roots were separated every command simply
+       resolved its problem against cwd.  Falling back to cwd keeps that
+       documented consumption mode working instead of refusing a problem the
+       author can see; the commands that actually need a checkout -- building or
+       mounting the pool -- ask for one and fail there, where the message can
+       name the missing checkout and mean it.
     """
     override = problems_root_override()
     if override is not None:
@@ -213,7 +234,7 @@ def problems_root() -> Path:
     detected = problemset_root()
     if detected is not None:
         return (detected / PROBLEMS_DIRNAME).resolve()
-    return toolkit_root()
+    return toolkit_root_or_none() or Path.cwd().resolve()
 
 
 def problems_root_override() -> Path | None:

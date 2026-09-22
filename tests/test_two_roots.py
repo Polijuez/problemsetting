@@ -379,3 +379,43 @@ def test_the_override_variable_is_named_problems_root() -> None:
 def test_the_detection_markers_are_the_vendoring_signature() -> None:
     assert judges.PROBLEMS_DIRNAME == "problems"
     assert re.fullmatch(r"vendor[/\\]problemsetting", str(judges.VENDORED_TOOLKIT))
+
+
+# ---------------------------------------------------------------------------
+# The installed-package mode
+# ---------------------------------------------------------------------------
+
+
+def test_an_installed_copy_with_no_checkout_falls_back_to_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The toolkit is consumed as a vendored submodule OR as an installed package.
+
+    Only the first has a checkout, so only the first has ``vendor/judge-server``
+    for the image build.  Regression: routing every problem command through a
+    resolver that insisted on a checkout made the documented installed-package
+    mode fail for every command except ``new`` -- ``cases suma`` used to resolve
+    against cwd and write ``init.yml``, then refused with "cannot locate the
+    problemsetting checkout".  Reading and writing problem files never needed a
+    checkout, so it may not require one.
+    """
+    monkeypatch.delenv(judges.PROBLEMS_ROOT_ENV, raising=False)
+    monkeypatch.delenv("PROBLEMSETTING_ROOT", raising=False)
+    monkeypatch.setattr(judges, "toolkit_root_or_none", lambda: None)
+    monkeypatch.chdir(tmp_path)
+
+    assert judges.problems_root() == tmp_path.resolve()
+
+
+def test_the_pool_still_demands_a_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Where the checkout genuinely is needed, the error must say so.
+
+    Falling back to cwd must not paper over the missing ``vendor/judge-server``:
+    the image is built from it, so building and mounting a pool still fail, at
+    the point that needs it, naming the checkout to point at.
+    """
+    monkeypatch.delenv("PROBLEMSETTING_ROOT", raising=False)
+    monkeypatch.setattr(judges, "toolkit_root_or_none", lambda: None)
+
+    with pytest.raises(JudgeError, match="cannot locate the problemsetting checkout"):
+        judges.toolkit_root()
