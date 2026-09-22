@@ -1,4 +1,4 @@
-"""``cases``, ``archive`` and ``build``: generator → ``cases/*.in`` + ``init.yml`` → ``.zip``.
+"""``cases``, ``archive``, ``build``, ``regenerate``: generator → cases → ``init.yml`` → ``.zip``.
 
 The generator is the author's code (``<problem>/generator.py``); this module is
 the fixed half of the contract (decision Q22).  The protocol:
@@ -41,20 +41,30 @@ membership, pinned permissions and compression level (:func:`write_reproducible_
 are written on every archive (decision Q15): the SHA-256 of the archive bytes and
 an independent SHA-256 manifest of the case *data*, so an unrelated repackaging
 cannot masquerade as a change in the cases (or the reverse).
+
+``regenerate`` (decision Q22) is the command that takes a *fresh clone* of a
+problemset repository -- which by design commits no test data -- to a built tree,
+and reports per problem whether the result still matches the checksums that were
+committed.  It rebuilds and verifies in one pass, and the two halves are kept
+apart: a drifted generator is reported as drift, never silently repaired into a
+pass by the checksums the build itself just wrote.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import hashlib
 import io
 import json
+import os
 import re
 import shutil
+import tempfile
 import types
 import zipfile
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -62,8 +72,9 @@ import yaml
 
 from . import judges
 from . import meta as meta_mod
+from . import templates
 from .commands import Command, register
-from .errors import CaseError
+from .errors import CaseError, ProblemsettingError
 
 GENERATOR_FILENAME = "generator.py"
 INIT_FILENAME = "init.yml"
@@ -581,8 +592,10 @@ def load_init(problem_dir: Path) -> dict[str, Any]:
     path = problem_dir / INIT_FILENAME
     if not path.is_file():
         raise CaseError(
-            f"{path} not found -- init.yml is generated; run "
-            f"`problemsetting cases {problem_dir.name}` first"
+            f"{path} not found -- init.yml, the cases it names and the committed "
+            f"`*{CHECKSUM_SUFFIX}` checksums beside them are all build products of "
+            f"meta.yml and generator.py; rebuild them with "
+            f"`problemsetting regenerate {problem_dir.name}`"
         )
     try:
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -783,10 +796,45 @@ def sha256_of(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def write_checksums(
+def checksum_texts(
     problem_dir: Path, archive_name: str, names: Sequence[str], document: Mapping[str, Any]
-) -> tuple[Path, Path]:
-    """Write both committed checksums beside the archive; return their paths.
+) -> dict[str, str]:
+    """Both committed checksums' *text*, keyed by file name, without writing them.
+
+    Computing the text and writing it are separate steps so that a caller can ask
+    what a build would commit *before* anything is committed.  That is what lets
+    ``regenerate`` compare a rebuild against the committed checksums without ever
+    overwriting one (decision Q22): the comparison needs the rebuilt digests, not
+    the rebuilt *files*, and writing them first would replace the very record the
+    comparison is about.
+    """
+    return {
+        archive_checksum_name(archive_name): (
+            f"{sha256_file(problem_dir / archive_name)}  {archive_name}\n"
+        ),
+        case_data_checksum_name(archive_name): case_data_manifest(
+            problem_dir, names, document
+        ),
+    }
+
+
+def measure_checksums(problem_dir: Path) -> dict[str, str]:
+    """The checksums the problem on disk currently produces, computed but not written.
+
+    Read back through :func:`load_init`, exactly like :func:`run_archive`: the
+    archive name and the case membership come from the emitted ``init.yml``, so the
+    measured digests describe the build that is actually there rather than what
+    some earlier call happened to pass around.
+    """
+    init_path = problem_dir / INIT_FILENAME
+    document = load_init(problem_dir)
+    archive_name = declared_archive(document, str(init_path))
+    names = referenced_cases(document, str(init_path))
+    return checksum_texts(problem_dir, archive_name, names, document)
+
+
+def write_checksums(problem_dir: Path, texts: Mapping[str, str]) -> dict[str, Path]:
+    """Write the committed checksums beside the archive; return their paths by name.
 
     The first ties the packaged artifact to the committed source; the second
     records the cases independently of how they were packaged (decision Q15).
@@ -798,28 +846,40 @@ def write_checksums(
     there.  That is deliberate: they are the committed record of what the
     generator produced, and deleting them on a failure would lose the evidence
     ``regenerate --check`` (decision Q22) compares against.
+
+    Keyed by file name rather than returned positionally: the two names are
+    derived from the archive name, and a caller reporting "sha256 of the archive"
+    against the case-data file would be wrong in a way nothing else would notice.
     """
-    archive_checksum = problem_dir / archive_checksum_name(archive_name)
-    case_checksum = problem_dir / case_data_checksum_name(archive_name)
-    archive_checksum.write_text(
-        f"{sha256_file(problem_dir / archive_name)}  {archive_name}\n", encoding="utf-8"
-    )
-    case_checksum.write_text(
-        case_data_manifest(problem_dir, names, document), encoding="utf-8"
-    )
-    return archive_checksum, case_checksum
+    written = {name: problem_dir / name for name in sorted(texts)}
+    for name, text in texts.items():
+        written[name].write_text(text, encoding="utf-8")
+    return written
 
 
-def run_archive(problem: str) -> int:
-    problem_dir = judges.resolve_problem(problem)
-    init_path = problem_dir / INIT_FILENAME
-    document = load_init(problem_dir)
+def declared_archive(document: Mapping[str, Any], source: str) -> str:
+    """The ``archive:`` filename ``init.yml`` declares, or an error naming ``source``."""
     archive_name = document.get("archive")
     if not isinstance(archive_name, str) or not archive_name:
         raise CaseError(
-            f"{init_path}: no `archive:` filename declared; the judge needs one to find "
+            f"{source}: no `archive:` filename declared; the judge needs one to find "
             f"the bundled cases"
         )
+    return archive_name
+
+
+def run_archive(problem: str, *, commit: bool = True) -> int:
+    """Zip the cases ``init.yml`` references; write the checksums unless told not to.
+
+    ``commit=False`` is what ``regenerate`` uses: the archive itself must be
+    rebuilt (the judge reads the expected answers out of it), but the checksum
+    *files* are the committed record ``regenerate`` compares against, so a build
+    that wrote them first would destroy the evidence before the comparison.
+    """
+    problem_dir = judges.resolve_problem(problem)
+    init_path = problem_dir / INIT_FILENAME
+    document = load_init(problem_dir)
+    archive_name = declared_archive(document, str(init_path))
     names = referenced_cases(document, str(init_path))
 
     missing = [name for name in names if not (problem_dir / name).is_file()]
@@ -834,12 +894,14 @@ def run_archive(problem: str) -> int:
 
     archive_path = problem_dir / archive_name
     write_reproducible_zip(archive_path, [(name, problem_dir / name) for name in names])
-    archive_checksum, case_checksum = write_checksums(
-        problem_dir, archive_name, names, document
-    )
     print(f"{archive_path}: {len(names)} members")
-    print(f"{archive_checksum}: sha256 of the archive")
-    print(f"{case_checksum}: sha256 of the case data")
+    if not commit:
+        return 0
+    written = write_checksums(
+        problem_dir, checksum_texts(problem_dir, archive_name, names, document)
+    )
+    print(f"{written[archive_checksum_name(archive_name)]}: sha256 of the archive")
+    print(f"{written[case_data_checksum_name(archive_name)]}: sha256 of the case data")
     return 0
 
 
@@ -862,11 +924,13 @@ def run_build_command(args: argparse.Namespace) -> int:
     return run_build(args.problem, seed=args.seed)
 
 
-def run_build(problem: str, *, seed: int | None = None) -> int:
+def run_build(problem: str, *, seed: int | None = None, commit: bool = True) -> int:
     """``cases`` → ``outputs`` → ``archive``, in that order and by name.
 
     The steps are the same code paths the standalone subcommands use, so
-    ``build`` cannot drift from them.
+    ``build`` cannot drift from them.  ``commit=False`` reaches :func:`run_archive`
+    and stops the checksums from being written; see that function for why
+    ``regenerate`` needs it.
     """
     print(f"==> cases {problem}")
     if (status := run_cases(problem, seed=seed)) != 0:
@@ -877,7 +941,7 @@ def run_build(problem: str, *, seed: int | None = None) -> int:
         return status
 
     print(f"==> archive {problem}")
-    return run_archive(problem)
+    return run_archive(problem, commit=commit)
 
 
 def _run_outputs_step(problem: str) -> int:
@@ -891,6 +955,328 @@ def _run_outputs_step(problem: str) -> int:
     from . import outputs
 
     return outputs.run_outputs(problem)
+
+
+# ---------------------------------------------------------------------------
+# regenerate
+# ---------------------------------------------------------------------------
+
+#: The three ways a rebuild compares to what is committed, plus the fourth
+#: outcome where there is nothing to compare against or no rebuild at all (see
+#: :func:`compare_checksums` and :func:`_regenerate_one`).
+OK = "OK"
+NEW = "NEW"
+DRIFT = "DRIFT"
+FAILED = "FAIL"
+
+
+@dataclasses.dataclass(frozen=True)
+class Outcome:
+    """One problem's rebuild, and how the result compares to what was committed."""
+
+    problem: str
+    status: str
+    detail: tuple[str, ...] = ()
+
+    @property
+    def failed(self) -> bool:
+        """Whether this outcome is a result the author has to act on.
+
+        ``NEW`` is not a failure: a problem whose checksums are not committed yet
+        is one being built for the first time, and its first build has nothing to
+        disagree with.  ``DRIFT`` is, and so is a build that did not finish.
+        """
+        return self.status in (DRIFT, FAILED)
+
+
+def add_regenerate_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "problem",
+        nargs="?",
+        default=None,
+        help="one problem to rebuild (default: every problem under the problems root)",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="build a scratch copy and compare without writing anything",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="seed for the generator (default: the generator's own)",
+    )
+
+
+def run_regenerate_command(args: argparse.Namespace) -> int:
+    return run_regenerate(args.problem, seed=args.seed, check=args.check)
+
+
+def discover_problems(root: Path) -> list[Path]:
+    """Every problem directory under ``root``, sorted by path.
+
+    A problem is a directory holding a ``meta.yml`` -- the same marker ``new``
+    writes and :func:`meta.load` requires, so the set this returns is exactly the
+    set of directories the other subcommands can act on.
+
+    The walk is recursive because DMOJ discovers ``/problems/**/init.yml``
+    recursively (``dmoj/judge.py``'s glob), so a nested layout is legal (decision
+    Q8).  Two kinds of directory are skipped, because neither is a problem the
+    repository authored and both would otherwise appear in a report about it:
+
+    * the directories a pool masks (``judges.MASKED_UNDER_PROBLEMS``) -- ``vendor``
+      ships a judge-server whose testsuite holds ~46 problems of its own;
+    * the toolkit's own package data, which is the one place the *fallback*
+      problems root (the toolkit checkout itself) would otherwise find ``meta.yml``
+      files: the eight shipped templates under ``src/problemsetting/models/``.
+    """
+    found: list[Path] = []
+    for path in sorted(root.rglob(meta_mod.META_FILENAME)):
+        problem_dir = path.parent
+        if any(
+            part in judges.MASKED_UNDER_PROBLEMS
+            for part in problem_dir.relative_to(root).parts
+        ):
+            continue
+        if _is_shipped_template(problem_dir):
+            continue
+        found.append(problem_dir)
+    return found
+
+
+def _is_shipped_template(problem_dir: Path) -> bool:
+    """Whether ``problem_dir`` is a shipped model template rather than a problem.
+
+    Only reachable when :func:`judges.problems_root` fell back to the toolkit
+    checkout, which is exactly the case where the eight templates under
+    ``src/problemsetting/models/`` would be discovered as problems of their own.
+    A problemset repository's ``problems/`` never nests one, so this cannot hide a
+    real problem there.
+    """
+    return problem_dir.is_relative_to(templates.MODELS_ROOT)
+
+
+def committed_checksums(problem_dir: Path) -> dict[str, str]:
+    """The committed ``*{CHECKSUM_SUFFIX}`` files beside a problem, by file name.
+
+    The text, not a parsed digest: the comparison this feeds is "did the rebuild
+    reproduce the committed record", and byte equality of the record is both the
+    question and the answer.  Reading it as text also keeps a checksum file the
+    author hand-edited (or one with a stale second field) a *difference* rather
+    than a value this toolkit quietly reinterprets.
+    """
+    return {
+        path.name: path.read_text(encoding="utf-8")
+        for path in sorted(problem_dir.glob(f"*{CHECKSUM_SUFFIX}"))
+        if path.is_file()
+    }
+
+
+def compare_checksums(
+    committed: Mapping[str, str], fresh: Mapping[str, str]
+) -> tuple[str, tuple[str, ...]]:
+    """Whether a rebuild reproduced the committed checksums, and what differs.
+
+    The comparison is over the *set* of checksum files as well as their contents,
+    because a rebuild can also change which ones exist: renaming a problem's
+    archive (``archive:`` in ``init.yml``, which derives the checksum names) leaves
+    the old committed files behind and writes new ones, and comparing only the
+    names present in both would call that a match.
+    """
+    if not committed:
+        return NEW, (
+            f"nothing committed under *{CHECKSUM_SUFFIX} yet; the rebuild produces "
+            f"{', '.join(sorted(fresh)) if fresh else 'none'}",
+        )
+    differences: list[str] = []
+    for name in sorted(set(committed) | set(fresh)):
+        if name not in fresh:
+            differences.append(f"{name}: committed, but the rebuild no longer produces it")
+        elif name not in committed:
+            differences.append(f"{name}: the rebuild produces it, but nothing is committed")
+        elif committed[name] != fresh[name]:
+            differences.append(f"{name}: the rebuild differs from the committed checksum")
+    if differences:
+        return DRIFT, tuple(differences)
+    return OK, (f"{', '.join(sorted(committed))} match the rebuild",)
+
+
+@contextlib.contextmanager
+def _build_context(build_dir: Path) -> Iterator[None]:
+    """Run a build with ``build_dir`` resolvable by its own bare name, and only it.
+
+    ``build`` prints the argument it was handed, and a report should name the
+    problem the way the author's own ``problemsetting build fib`` reads -- not an
+    absolute path.  So the build runs from ``build_dir``'s parent, with the
+    problem's own name as the argument, and the problems root pointed at that same
+    parent for the duration.
+
+    The root matters for ``--check``: that mode builds a scratch *copy*, so a bare
+    name would otherwise be ambiguous between the copy (beside cwd) and the real
+    problem (under the problems root) -- and :func:`judges.resolve_problem` refuses
+    an ambiguous name rather than silently picking one.  Pointing the root at the
+    build's own parent makes ``fib`` mean the tree being built, whichever tree that
+    is.
+    """
+    previous = os.environ.get(judges.PROBLEMS_ROOT_ENV)
+    os.environ[judges.PROBLEMS_ROOT_ENV] = str(build_dir.parent)
+    try:
+        with contextlib.chdir(build_dir.parent):
+            yield
+    finally:
+        if previous is None:
+            os.environ.pop(judges.PROBLEMS_ROOT_ENV, None)
+        else:
+            os.environ[judges.PROBLEMS_ROOT_ENV] = previous
+
+
+@contextlib.contextmanager
+def _scratch_copy(problem_dir: Path) -> Iterator[Path]:
+    """A throwaway copy of the problem, built instead of the real one.
+
+    ``--check`` must leave the tree exactly as it found it, and the *build* is what
+    writes: ``cases/``, ``init.yml``, ``__meta__/``, the archive and the checksums.
+    Building a copy makes that guarantee absolute rather than best-effort -- the
+    real directory is never opened for writing at all, so a generator that crashes
+    halfway, or a toolkit bug that forgets to clean up, still cannot touch it.
+
+    The copy keeps the problem's directory *name*, because the generated
+    ``init.yml`` declares ``archive: <name>.zip`` and the committed checksum file
+    names derive from it; a renamed copy would compare the wrong two names.
+    """
+    with tempfile.TemporaryDirectory(prefix=f"regenerate-{problem_dir.name}-") as scratch:
+        destination = Path(scratch) / problem_dir.name
+        shutil.copytree(
+            problem_dir,
+            destination,
+            symlinks=True,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        yield destination
+
+
+def _rebuild(
+    build_dir: Path,
+    committed: Mapping[str, str],
+    *,
+    seed: int | None,
+    check: bool,
+) -> Outcome:
+    """Build ``build_dir``; compare its checksums to ``committed``; report.
+
+    The build runs with ``commit=False``, so it writes the cases, ``init.yml``,
+    ``__meta__`` and the archive but *not* the checksum files.  The rebuilt
+    digests are then measured from what is on disk and compared against the
+    committed ones, and only a rebuild that agrees -- or one with nothing
+    committed to agree with -- is allowed to write them.  A drifting rebuild
+    therefore leaves the committed checksums exactly where they were, which is
+    what makes the drift something the author has to see and fix rather than a
+    file that quietly re-described itself.
+
+    ``check`` never writes a checksum at all: the mode exists to answer the
+    question, and the answer must not change the tree it was asked about.
+    """
+    name = build_dir.name
+    with _build_context(build_dir):
+        status = run_build(name, seed=seed, commit=False)
+    if status != 0:
+        return Outcome(name, FAILED, (f"the build exited with status {status}",))
+
+    fresh = measure_checksums(build_dir)
+    verdict, detail = compare_checksums(committed, fresh)
+    if verdict != DRIFT and not check:
+        write_checksums(build_dir, fresh)
+    return Outcome(name, verdict, detail)
+
+
+def _regenerate_one(problem_dir: Path, *, seed: int | None, check: bool) -> Outcome:
+    """Rebuild one problem and report the result, turning authoring errors into one.
+
+    A problem whose generator does not build is one problem's problem: this
+    command's whole purpose is a report over a repository, so a single broken
+    generator is reported as ``FAIL`` and the rest of the run continues.  Anything
+    that is not a :class:`ProblemsettingError` is a bug in the toolkit and keeps
+    its traceback, exactly as the CLI does for every other command.
+
+    ``--check`` builds a scratch copy, and that copy is deleted before the report
+    is printed, so any path an error names is rewritten back to the real problem
+    directory first: ``/tmp/regenerate-alfa-xyz/alfa/generator.py`` is a file the
+    author could never open.
+    """
+    committed = committed_checksums(problem_dir)
+    if not check:
+        try:
+            return _rebuild(problem_dir, committed, seed=seed, check=False)
+        except ProblemsettingError as error:
+            return Outcome(problem_dir.name, FAILED, (str(error),))
+
+    with _scratch_copy(problem_dir) as scratch:
+        try:
+            outcome = _rebuild(scratch, committed, seed=seed, check=True)
+        except ProblemsettingError as error:
+            outcome = Outcome(problem_dir.name, FAILED, (str(error),))
+        return _relocate(outcome, scratch, problem_dir)
+
+
+def _relocate(outcome: Outcome, scratch: Path, problem_dir: Path) -> Outcome:
+    """Rewrite a report's scratch paths back to the real problem directory."""
+    replaced = tuple(line.replace(str(scratch), str(problem_dir)) for line in outcome.detail)
+    return dataclasses.replace(outcome, detail=replaced)
+
+
+def run_regenerate(
+    problem: str | None = None, *, seed: int | None = None, check: bool = False
+) -> int:
+    """Rebuild problems, and report whether the rebuild matches what is committed.
+
+    This is the command a fresh clone needs: the repository commits no test data
+    by design (decision Q7), only the generator and the checksums of what it
+    produced, so ``regenerate`` is what turns ``meta.yml`` + ``generator.py`` +
+    model solution back into ``cases/``, ``init.yml``, the archive and the
+    checksums ``verify`` and the judge need.
+
+    The two halves are deliberately not merged.  Rebuilding is for reaching a
+    working state; verifying is for detecting that the committed generator no
+    longer produces the committed checksums.  A problem whose rebuild drifts is
+    reported as ``DRIFT`` and its committed checksums are left untouched, so the
+    failure is not repaired by the very build that caused it.
+
+    ``check`` builds a scratch copy instead and writes nothing at all, which is
+    what makes it safe in CI -- and it is the mode whose exit status is the whole
+    point, so drift there is a non-zero exit.
+    """
+    if problem is not None:
+        targets = [judges.resolve_problem(problem)]
+    else:
+        root = judges.problems_root()
+        targets = discover_problems(root)
+        if not targets:
+            raise CaseError(
+                f"no problems under {root}: regenerate rebuilds every directory holding "
+                f"a {meta_mod.META_FILENAME}, and found none"
+            )
+
+    print(
+        f"==> regenerate {len(targets)} problem(s)"
+        + ("  (check: nothing is written)" if check else "")
+    )
+    outcomes = [_regenerate_one(target, seed=seed, check=check) for target in targets]
+    width = max(len(outcome.problem) for outcome in outcomes)
+    for outcome in outcomes:
+        print(f"  {outcome.status:<5} {outcome.problem:<{width}}  {outcome.detail[0]}")
+        for line in outcome.detail[1:]:
+            print(f"        {line}")
+
+    counts = {
+        status: sum(1 for outcome in outcomes if outcome.status == status)
+        for status in (OK, NEW, DRIFT, FAILED)
+    }
+    print(
+        "regenerate: "
+        + ", ".join(f"{count} {status}" for status, count in counts.items() if count)
+    )
+    return 1 if any(outcome.failed for outcome in outcomes) else 0
 
 
 register(
@@ -917,5 +1303,14 @@ register(
         help="run cases, outputs and archive in order",
         add_arguments=add_build_arguments,
         run=run_build_command,
+    )
+)
+
+register(
+    Command(
+        name="regenerate",
+        help="rebuild every problem (or one) and report drift against committed checksums",
+        add_arguments=add_regenerate_arguments,
+        run=run_regenerate_command,
     )
 )

@@ -339,6 +339,7 @@ problemsetting cases     generate cases/*.in and init.yml from the problem's gen
 problemsetting outputs   run the model solution over every case to produce cases/*.out
 problemsetting archive   zip the cases init.yml references into the declared archive
 problemsetting build     run cases, outputs and archive in order
+problemsetting regenerate rebuild every problem (or one) and report drift against committed checksums
 problemsetting judges    manage the judge image and the pool of long-lived judge containers
 problemsetting verify    grade the submissions declared in submissions.yml and check their expectations
 problemsetting stress    compare the model solution against the declared brute force on tiny random cases
@@ -375,6 +376,25 @@ problemsetting stress    compare the model solution against the declared brute f
   salidas que la propia solución modelo produjo.  `--cases` (200 por defecto) y
   `--seed` (por defecto una por corrida, siempre reportada).  Corre todo dentro
   del juez, así que necesita el pool.
+
+- **`regenerate [<problema>]`** — reconstruye los problemas que un clon recién
+  hecho no trae, y dice si el resultado coincide con los checksums commiteados.
+  Sin argumento recorre **todos** los problemas bajo la raíz de problemas; con un
+  problema, sólo ése.  `--check` construye una copia temporal y compara **sin
+  escribir nada**, y sale con estado distinto de cero si hay drift: es la forma
+  segura de correrlo en CI, porque no puede «arreglar» un drift pisando el
+  checksum commiteado.  `--seed` fija la semilla del generador.
+
+  El repo de problemas commitea el generador y los checksums de lo que produjo
+  (`<archivo>.zip.sha256sum` y `<archivo>.zip.cases.sha256sum`), nunca los datos
+  de test.  `regenerate` es lo que cierra el círculo: reconstruye `cases/`,
+  `init.yml`, el `.zip` y los checksums, y **reporta por problema** si el
+  rebuild sigue coincidiendo (`OK`), si no hay nada commiteado con qué comparar
+  (`NEW`, el primer build) o si el generador commiteado ya no reproduce el
+  checksum commiteado (`DRIFT`).  Un rebuild con drift **no** reescribe el
+  checksum commiteado: el failure tiene que verse, no auto-repararse.  Cuando
+  `verify`, `outputs` o `archive` no encuentran `init.yml`, el error ahora nombra
+  los checksums y apunta a este comando.
 
 ## Instalación
 
