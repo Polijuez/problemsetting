@@ -213,6 +213,7 @@ created mi-problema/ from model 'standard'
     edit generator.py, then           problemsetting cases mi-problema
     cases + outputs + archive         problemsetting build mi-problema
     grade the declared submissions    problemsetting verify mi-problema
+    publish the package to the site   problemsetting publish mi-problema --title ... --group ...
 ```
 
 Corrido en la raíz del repositorio (o en su `problems/`), `new` crea el problema
@@ -220,12 +221,19 @@ Corrido en la raíz del repositorio (o en su `problems/`), `new` crea el problem
 `--model`/`-m` elige el preset, `--solutionlang`/`-s` la extensión de la solución
 modelo, y `--force` reemplaza un directorio existente.
 
-**Elegí el nombre con cuidado.**  Tiene que ser único entre *todos* los problemas
-que el juez ve, y el sitio rechaza nombres de más de 20 caracteres:
+**Elegí el nombre con cuidado.**  Tiene que ser único entre *todos* los
+problemas del pool: es el id con el que el juez los descubre.  El pool enmascara
+`vendor/`, así que el testsuite de `vendor/judge-server/testsuite/` no se
+descubre; aun así `new` avisa cuando el nombre existe ahí, porque otro
+despliegue DMOJ podría ver los dos.  No hay tope de longitud: publicar asigna un
+UUID y el título humano viaja en el manifiesto del paquete.
 
 ```console
-$ ./problemsetting new this-name-is-way-too-long
-error: problem name 'this-name-is-way-too-long' is 25 characters; the judge site accepts at most 20
+$ ./problemsetting new aplusb
+warning: 'aplusb' is also a problem in the vendored judge-server testsuite
+(/.../vendor/judge-server/testsuite/aplusb); a pool this toolkit launches masks
+it, but another deployment could see two problems with that name -- consider
+choosing another
 ```
 
 Un modelo que no existe falla nombrando los que sí hay en esta build:
@@ -382,7 +390,41 @@ $ ./problemsetting stress mi-problema --cases 20
 stress: no counterexample -- the brute force agreed with the model solution on all 20 case(s)
 ```
 
-## 8. El flujo de regeneración y los checksums
+## 8. Publicar en el sitio
+
+`publish` hace por vos el empaquetado y la subida.  Corre `build` (casos,
+salidas, zip) y arma el paquete que el sitio acepta: `problem.yml` con
+`schema: 1`, `init.yml`, el zip de casos que `init.yml` declara, `statement.md`,
+los archivos de juez opcionales y `media/...`.  El manifiesto se deriva de
+`meta.yml` (límites por extensión) y del enunciado; el título, los alias, el
+grupo y la visibilidad los aporta quien publica.
+
+```console
+$ export POLIJUEZ_API_TOKEN=...          # token de perfil de DMOJ
+$ ./problemsetting publish mi-problema \
+    --title "Nombre en el sitio" \
+    --alias mi-problema \
+    --group basicos \
+    --visibility public
+...
+published mi-problema -> /problem/5f0c...
+  id        5f0c...
+  action    created, changed
+  cases     21
+  files     init.yml, mi-problema.zip
+  media     none
+  aliases   mi-problema
+```
+
+El UUID lo asigna el sitio y se imprime con el resumen de lo que aplicó.
+`--alias` y `--type` se repiten; `--visibility` es `private` por defecto.
+`--replace <uuid>` reemplaza el paquete vigente en vez de crear un problema.
+El token sale de `POLIJUEZ_API_TOKEN` (recomendado) o `--token`, y la base de
+`POLIJUEZ_API_URL` o `--base-url`.  El token nunca se imprime; un error del
+sitio se reporta con su código HTTP, el código del servicio y el archivo
+culpable (por ejemplo `422 unsupported_schema [problem.yml]`).
+
+## 9. El flujo de regeneración y los checksums
 
 Un clon recién hecho **no trae los casos**: trae las fuentes y los checksums.
 `regenerate` cierra el círculo: reconstruye `cases/`, `init.yml`, el `.zip` y los
@@ -457,7 +499,7 @@ git submodule update --init --recursive      # --recursive es obligatorio
 ./problemsetting verify mi-problema          # califica
 ```
 
-## 9. Los dos fallos probables, y su arreglo
+## 10. Los dos fallos probables, y su arreglo
 
 ### a. El submódulo anidado del juez quedó vacío
 
@@ -516,7 +558,7 @@ $ ./problemsetting judges start
 `judges status` muestra la raíz montada de cada contenedor antes de intentar
 calificar, así que el conflicto se ve antes de que el rechazo aparezca.
 
-## 10. La toolchain: qué fija el flake y qué no
+## 11. La toolchain: qué fija el flake y qué no
 
 La toolchain soportada la fija la infraestructura de la organización con un flake
 de Nix: `infra/flake.lock` pinea `nixpkgs` (rev
@@ -543,7 +585,7 @@ checksums commiteados.  **Eso es lo que se afirma y no más**: reproducibilidad
 per-input medida en este entorno, no una promesa de identidad byte a byte entre
 máquinas arbitrarias bajo cualquier toolchain.
 
-## 11. Requisitos
+## 12. Requisitos
 
 - [`uv`](https://docs.astral.sh/uv/) y Python 3.13+.
 - `git`, para los submódulos.

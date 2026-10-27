@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import sys
 from pathlib import Path
 
 import yaml
@@ -71,6 +72,16 @@ def run(args: argparse.Namespace) -> int:
     name = validate_name(args.problem)
     destination = destination_for(name)
 
+    collision = judges.testsuite_problem(name)
+    if collision is not None:
+        print(
+            f"warning: {name!r} is also a problem in the vendored judge-server "
+            f"testsuite ({collision}); a pool this toolkit launches masks it, but "
+            f"another deployment could see two problems with that name -- consider "
+            f"choosing another",
+            file=sys.stderr,
+        )
+
     if destination.exists() and not args.force:
         raise ScaffoldError(
             f"{destination} already exists -- pass --force to replace it, or choose another name"
@@ -108,6 +119,7 @@ def run(args: argparse.Namespace) -> int:
     print(f"    edit generator.py, then           problemsetting cases {name}")
     print(f"    cases + outputs + archive         problemsetting build {name}")
     print(f"    grade the declared submissions    problemsetting verify {name}")
+    print(f"    publish the package to the site   problemsetting publish {name} --title ... --group ...")
     return 0
 
 

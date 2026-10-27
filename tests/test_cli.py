@@ -133,9 +133,37 @@ def test_new_rejects_unusable_names(name: str, tmp_path, monkeypatch, capsys) ->
     assert "invalid problem name" in assert_fails(["new", name], monkeypatch, tmp_path, capsys)
 
 
-def test_new_rejects_a_name_the_site_would_truncate(tmp_path, monkeypatch, capsys) -> None:
-    err = assert_fails(["new", "a" * 21], monkeypatch, tmp_path, capsys)
-    assert "at most 20" in err
+def test_new_accepts_a_name_longer_than_the_old_site_limit(
+    tmp_path, monkeypatch,
+) -> None:
+    # The directory name is no longer the site's problem id (the site assigns a
+    # UUID and the human title travels in the manifest), so there is no 20-char
+    # cap; the name only has to survive being a directory and a judge problem id.
+    name = "a" * 25
+    assert run(["new", name], monkeypatch, tmp_path) == 0
+    assert (tmp_path / name / "meta.yml").is_file()
+
+
+def test_new_warns_when_the_name_exists_in_the_judge_testsuite(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The pool masks ``vendor/``; the name is still warned about at naming time."""
+    from problemsetting import judges
+
+    toolkit = tmp_path / "toolkit"
+    testsuite = toolkit / "vendor" / "judge-server" / "testsuite"
+    (testsuite / "aplusb").mkdir(parents=True)
+    monkeypatch.setenv("PROBLEMSETTING_ROOT", str(toolkit))
+    work = tmp_path / "work"
+    work.mkdir()
+
+    assert run(["new", "aplusb"], monkeypatch, work) == 0
+
+    err = capsys.readouterr().err
+    assert "warning:" in err
+    assert "aplusb" in err
+    assert "testsuite" in err
+    assert (work / "aplusb" / "meta.yml").is_file()
 
 
 @pytest.mark.parametrize("name", ["--", "-leading", "demo\n", "demo\nx"])

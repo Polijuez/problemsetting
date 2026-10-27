@@ -38,3 +38,7 @@ class OutputError(ProblemsettingError):
 
 class VerifyError(ProblemsettingError):
     """``submissions.yml`` is malformed, or a graded run contradicts it."""
+
+
+class PublishError(ProblemsettingError):
+    """The package cannot be assembled, or the site refused it."""

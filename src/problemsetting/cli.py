@@ -24,6 +24,7 @@ from .errors import ProblemsettingError
 from . import cases  # noqa: F401  (registers `cases`, `archive`, `build`)
 from . import judges  # noqa: F401  (registers `judges`)
 from . import outputs  # noqa: F401  (registers `outputs`)
+from . import publish  # noqa: F401  (registers `publish`)
 from . import scaffold  # noqa: F401  (registers `new`)
 from . import stress  # noqa: F401  (registers `stress`)
 from . import verify  # noqa: F401  (registers `verify`)

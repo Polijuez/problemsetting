@@ -142,10 +142,9 @@ def load_init(problem: Path) -> Any:
 # The pipeline under test
 # ---------------------------------------------------------------------------
 
-#: Problem names for the scaffold loop.  Explicit rather than derived: the site
-#: caps ids at 20 characters (``problems.NAME_RE``), and the model names are too
-#: long to use directly, so a name that collides or overflows must be a visible
-#: edit here rather than a silent truncation.
+#: Problem names for the scaffold loop.  Explicit rather than derived: some model
+#: names are too long to read as problem ids, so a name that collides or is
+#: unreadable must be a visible edit here rather than a silent truncation.
 CI_PROBLEM_NAMES = {
     "standard": "ci-standard",
     "batched": "ci-batched",

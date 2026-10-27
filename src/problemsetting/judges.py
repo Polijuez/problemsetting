@@ -320,6 +320,27 @@ def submodule_dir(root: Path | None = None) -> Path:
     return (root or repository_root()) / "vendor" / "judge-server"
 
 
+def testsuite_problem(name: str) -> Path | None:
+    """The vendored judge-server's own problem called ``name``, if it ships one.
+
+    A pool masks ``vendor/`` (see :data:`MASKED_UNDER_PROBLEMS`), so a collision
+    cannot reach a judge this toolkit launches.  Authors still get a warning when
+    they pick one of those names: the mask is this toolkit's convention, not a
+    property of every DMOJ deployment the problem may travel to, and a duplicated
+    id is the kind of thing that should be visible at naming time rather than
+    during grading.
+
+    Best-effort by design: an installed package has no checkout, and an
+    unpopulated submodule has no testsuite.  Either way there is nothing to
+    collide with locally.
+    """
+    root = toolkit_root_or_none()
+    if root is None:
+        return None
+    candidate = submodule_dir(root) / "testsuite" / name
+    return candidate if candidate.is_dir() else None
+
+
 #: The command that populates the vendored judge-server, printed by
 #: :func:`submodule_message`.  ``--recursive`` is the part that is easy to leave
 #: out and impossible to work around: ``vendor/judge-server`` is a submodule, and

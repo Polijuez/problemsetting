@@ -18,6 +18,9 @@ uv run problemsetting build suma
 
 # 4. Calificar las submissions declaradas contra el juez
 uv run problemsetting verify suma
+
+# 5. Publicar el paquete en el sitio
+uv run problemsetting publish suma --title "Suma de dos" --group basicos
 ```
 
 Todos los subcomandos toman el **nombre del problema** y lo resuelven contra el
@@ -36,6 +39,7 @@ created suma/ from model 'standard'
     edit generator.py, then           problemsetting cases suma
     cases + outputs + archive         problemsetting build suma
     grade the declared submissions    problemsetting verify suma
+    publish the package to the site   problemsetting publish suma --title ... --group ...
 ```
 
 Salida real de `build`:
@@ -89,21 +93,52 @@ $ uv run problemsetting stress suma --cases 20
 stress: no counterexample -- the brute force agreed with the model solution on all 20 case(s) (seed 11960316)
 ```
 
-**Elegí el nombre con cuidado.** El id del problema es el nombre del directorio,
-y tiene que ser único entre *todos* los problemas que ve el juez: el pool monta
-el checkout entero, así que también ve el testsuite que viene dentro de
-`vendor/judge-server/testsuite/`.  Un problema llamado `aplusb`, `batched` o
-`helloworld` choca con uno de esos y el juez lo avisa:
+**Elegí el nombre con cuidado.** El id local sigue siendo el nombre del
+directorio: es lo que el juez ve, y tiene que ser único entre *todos* los
+problemas del pool.  El pool enmascara `vendor/`, así que el testsuite que viene
+dentro de `vendor/judge-server/testsuite/` no se descubre; aun así `new` avisa si
+elegís un nombre que ya existe ahí (`aplusb`, `batched`, `helloworld`, …), porque
+otro despliegue DMOJ podría ver los dos:
 
 ```
-Warning: duplicate problem aplusb found at /problems/vendor/judge-server/testsuite/aplusb, ignoring in favour of /problems/work/readme/aplusb
+$ uv run problemsetting new aplusb
+warning: 'aplusb' is also a problem in the vendored judge-server testsuite
+(/.../vendor/judge-server/testsuite/aplusb); a pool this toolkit launches masks
+it, but another deployment could see two problems with that name -- consider
+choosing another
 ```
 
-Lo que se observa es peor que lo que dice el aviso: con un problema propio
-llamado `aplusb`, `verify` califica contra los casos del problema vendido (los de
-5, 20 y 75 puntos) y la solución modelo da `WA` con `0/100`, en vez de usar los
-21 casos que declara tu `init.yml`.  Antes de bautizar el problema, comprobá que
-el nombre no exista en `vendor/judge-server/testsuite/`.
+El nombre **ya no** tiene el tope de 20 caracteres que existía cuando era el
+código del sitio: publicar asigna un UUID y el título humano viaja en el
+manifiesto.
+
+### Publicar en el sitio
+
+`publish` corre `build` y sube el paquete que el sitio consume: `problem.yml`
+(manifiesto `schema: 1`), `init.yml`, el zip de casos que `init.yml` declara,
+`statement.md`, los archivos de juez opcionales (`checker.py`, `grader.py`,
+`signature.hpp`, `evaluator.cpp`) y `media/...`.  El manifiesto se deriva de
+`meta.yml` (límites por extensión y lenguaje de la solución) y del enunciado;
+el título, los alias, el grupo y la visibilidad los aporta quien publica.
+
+```bash
+export POLIJUEZ_API_TOKEN=...        # token de perfil de DMOJ; no se imprime
+
+uv run problemsetting publish suma \
+  --title "Suma de dos" \
+  --alias suma --alias suma-de-dos \
+  --group basicos \
+  --visibility public
+```
+
+El sitio asigna el UUID y lo imprime junto con el resumen de lo que aplicó
+(archivos, casos, alias agregados, avisos).  `--alias` y `--type` se pueden
+repetir; `--visibility` es `private` por defecto.  `--replace <uuid>` reemplaza
+el paquete vigente de ese problema en vez de crear uno nuevo.  El token va por
+`POLIJUEZ_API_TOKEN` o `--token` (la variable evita que quede en la lista de
+procesos), y la base por `POLIJUEZ_API_URL` o `--base-url` (por defecto
+`https://api.polijuez.ar`).  Un error del sitio se reporta con su código y el
+archivo culpable, y el token nunca aparece en la salida.
 
 ### Requisito para `verify` (y `stress`): la imagen del juez
 
@@ -250,7 +285,8 @@ El toolkit **genera** (y por lo tanto **no se commitea**):
 - `init.yml` — el archivo que lee DMOJ; sale de `meta.yml` + `generator.py`.
 - `cases/*.in` y `cases/*.out` — los casos y sus salidas esperadas.
 - `__meta__/` — caché incremental de `outputs` y binarios compilados.
-- `*.zip` — el archivo que se sube al sitio.
+- `*.zip` — el zip de casos que `init.yml` declara.  El paquete que se sube
+  (`publish`) se arma al vuelo con ese zip adentro; no queda en el directorio.
 
 Todos están en `.gitignore`.  Un `init.yml` o un `.zip` commiteado es un
 artefacto viejo esperando a desincronizarse del generador.
@@ -339,6 +375,7 @@ problemsetting cases     generate cases/*.in and init.yml from the problem's gen
 problemsetting outputs   run the model solution over every case to produce cases/*.out
 problemsetting archive   zip the cases init.yml references into the declared archive
 problemsetting build     run cases, outputs and archive in order
+problemsetting publish   build the problem and upload its package to the site
 problemsetting regenerate rebuild every problem (or one) and report drift against committed checksums
 problemsetting judges    manage the judge image and the pool of long-lived judge containers
 problemsetting verify    grade the submissions declared in submissions.yml and check their expectations
@@ -347,9 +384,14 @@ problemsetting stress    compare the model solution against the declared brute f
 
 - **`new <nombre>`** — crea el directorio del problema desde una plantilla.
   `--model`, `--solutionlang` (extensión de la solución modelo), `--force`
-  (reemplaza el directorio si ya existe).  El nombre es el id del problema:
-  minúsculas, dígitos, `-` y `_`, y como máximo 20 caracteres (el límite del
-  sitio).
+  (reemplaza el directorio si ya existe).  El nombre es el id **local** del
+  problema: minúsculas, dígitos, `-` y `_`.  Ya no hay tope de 20 caracteres.
+- **`publish <problema>`** — corre `build` y sube el paquete al sitio.  `--title`
+  y `--group` son obligatorios; `--alias` y `--type` se repiten; `--visibility`
+  es `private` por defecto; `--replace <uuid>` reemplaza un problema existente.
+  El token y la base salen de `POLIJUEZ_API_TOKEN`/`--token` y
+  `POLIJUEZ_API_URL`/`--base-url`, y se imprime el UUID asignado con el resumen
+  del servidor.
 - **`cases <problema>`** — corre el `generator.py` y escribe `cases/*.in` +
   `init.yml`.  `--seed` fija la semilla (por defecto, la del propio generador).
 - **`outputs <problema>`** — corre la solución modelo sobre cada caso y escribe
