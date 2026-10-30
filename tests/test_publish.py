@@ -573,3 +573,50 @@ def test_a_base_that_already_names_the_api_prefix_is_not_doubled() -> None:
 def test_a_base_without_a_scheme_is_refused() -> None:
     with pytest.raises(PublishError, match="http"):
         publish_mod.api_endpoint("api.example")
+
+
+# ---------------------------------------------------------------------------
+# Statement formats
+# ---------------------------------------------------------------------------
+
+def _bare_manifest() -> dict:
+    return {
+        "schema": 1,
+        "title": "Sintético",
+        "aliases": [],
+        "limits": {},
+        "types": [],
+        "group": "basico",
+        "visibility": "private",
+    }
+
+
+def test_a_pdf_statement_travels_at_the_package_root(tmp_path: Path) -> None:
+    problem = _write_synthetic_problem(tmp_path)
+    (problem / "media" / "statement.md").unlink()
+    (problem / "media" / "statement.pdf").write_bytes(b"%PDF-1.4\n(fake)\n")
+    (problem / "media" / "kit.zip").write_bytes(b"PK\x03\x04")
+
+    files = publish_mod.package_files(problem, _bare_manifest())
+
+    assert "statement.md" not in files
+    assert files["statement.pdf"].startswith(b"%PDF-")
+    assert files["media/kit.zip"] == b"PK\x03\x04"
+    assert "media/statement.pdf" not in files
+
+
+def test_a_pdf_statement_without_the_magic_bytes_is_refused(tmp_path: Path) -> None:
+    problem = _write_synthetic_problem(tmp_path)
+    (problem / "media" / "statement.md").unlink()
+    (problem / "media" / "statement.pdf").write_bytes(b"no soy un pdf\n")
+
+    with pytest.raises(PublishError, match="PDF"):
+        publish_mod.package_files(problem, _bare_manifest())
+
+
+def test_both_statements_are_refused(tmp_path: Path) -> None:
+    problem = _write_synthetic_problem(tmp_path)
+    (problem / "media" / "statement.pdf").write_bytes(b"%PDF-1.4\n")
+
+    with pytest.raises(PublishError, match="exactly one"):
+        publish_mod.package_files(problem, _bare_manifest())

@@ -48,8 +48,12 @@ from .errors import PublishError
 #: The manifest, at the package root (ADR 0003; the site's ``MANIFEST_NAME``).
 MANIFEST_FILENAME = "problem.yml"
 
-#: The statement is served from the package root, not from ``media/``.
-STATEMENT_FILENAME = "statement.md"
+#: The statement travels at the package root, not inside ``media/``; it is
+#: ``statement.md`` (markdown) or ``statement.pdf``, exactly one.
+STATEMENT_MD_FILENAME = "statement.md"
+STATEMENT_PDF_FILENAME = "statement.pdf"
+STATEMENT_FILENAMES = (STATEMENT_MD_FILENAME, STATEMENT_PDF_FILENAME)
+STATEMENT_FILENAME = STATEMENT_MD_FILENAME
 
 MEDIA_DIRNAME = "media"
 
@@ -194,17 +198,17 @@ def package_files(problem_dir: Path, manifest: Mapping[str, Any]) -> dict[str, b
     document = cases.load_init(problem_dir)
     archive_name = cases.declared_archive(document, str(init_path))
 
-    statement_path = problem_dir / MEDIA_DIRNAME / STATEMENT_FILENAME
-    if not statement_path.is_file():
-        raise PublishError(
-            f"{statement_path} not found -- the site requires the statement as "
-            f"statement.md at the package root"
-        )
+    statement_path, statement_name = _resolve_statement(problem_dir)
     statement = statement_path.read_bytes()
-    try:
-        statement.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise PublishError(f"{statement_path} is not valid UTF-8: {error}") from error
+    if statement_name == STATEMENT_MD_FILENAME:
+        try:
+            statement.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise PublishError(f"{statement_path} is not valid UTF-8: {error}") from error
+    elif not statement.startswith(b"%PDF-"):
+        raise PublishError(
+            f"{statement_path} does not look like a PDF: it must start with %PDF-"
+        )
 
     archive_path = problem_dir / archive_name
     if not archive_path.is_file():
@@ -215,7 +219,7 @@ def package_files(problem_dir: Path, manifest: Mapping[str, Any]) -> dict[str, b
     files: dict[str, bytes] = {
         MANIFEST_FILENAME: render_manifest(manifest),
         cases.INIT_FILENAME: init_path.read_bytes(),
-        STATEMENT_FILENAME: statement,
+        statement_name: statement,
         archive_name: archive_path.read_bytes(),
     }
 
@@ -230,11 +234,37 @@ def package_files(problem_dir: Path, manifest: Mapping[str, Any]) -> dict[str, b
             if not path.is_file():
                 continue
             relative = path.relative_to(media_root)
-            if relative.as_posix() == STATEMENT_FILENAME:
+            if relative.as_posix() in STATEMENT_FILENAMES:
                 continue  # the statement travels at the package root
             files[f"{MEDIA_DIRNAME}/{relative.as_posix()}"] = path.read_bytes()
 
     return files
+
+
+def _resolve_statement(problem_dir: Path) -> tuple[Path, str]:
+    """The statement file the package carries: ``statement.md`` or ``statement.pdf``.
+
+    Exactly one of them may exist under ``media/``; both or neither is a
+    packaging error the site would reject anyway, so it fails here first with
+    the path that is easiest to fix.
+    """
+    found = [
+        (problem_dir / MEDIA_DIRNAME / name, name)
+        for name in STATEMENT_FILENAMES
+        if (problem_dir / MEDIA_DIRNAME / name).is_file()
+    ]
+    if not found:
+        raise PublishError(
+            f"{problem_dir / MEDIA_DIRNAME} has no statement: put statement.md (markdown) "
+            f"or statement.pdf there -- exactly one"
+        )
+    if len(found) > 1:
+        names = ", ".join(name for _, name in found)
+        raise PublishError(
+            f"{problem_dir / MEDIA_DIRNAME} has both {names}: the package carries "
+            f"exactly one statement"
+        )
+    return found[0]
 
 
 def assemble_package(problem_dir: Path, manifest: Mapping[str, Any]) -> bytes:

@@ -886,3 +886,68 @@ def test_a_run_with_more_batches_than_init_yml_declares_is_refused(
     )
     with pytest.raises(VerifyError, match="judges update"):
         verify.grade_entry("judge-1", problem, entry, [verify.BatchPlan(1, 100.0)])
+
+
+# ---------------------------------------------------------------------------
+# Check 7: the statement's media references
+# ---------------------------------------------------------------------------
+
+def _media_dir(tmp_path: Path) -> Path:
+    problem = tmp_path / "lintproblem"
+    media = problem / "media"
+    media.mkdir(parents=True)
+    (media / "kit.zip").write_bytes(b"PK\x03\x04")
+    (media / "template.hs").write_text("f =\n")
+    return problem
+
+
+def test_relative_links_that_resolve_pass_the_check(tmp_path: Path) -> None:
+    problem = _media_dir(tmp_path)
+    (problem / "media" / "statement.md").write_text(
+        "# Enunciado\n\n"
+        "[Kit](kit.zip) y [plantilla](media/template.hs) y "
+        "[DMOJ](https://dmoj.ca) y [ancla](#seccion) y [sitio](/problems/).\n"
+    )
+
+    check = verify.check_statement_references(problem)
+
+    assert check.status == "pass", check.problems
+
+
+def test_a_relative_link_to_a_missing_file_fails_the_check(tmp_path: Path) -> None:
+    problem = _media_dir(tmp_path)
+    (problem / "media" / "statement.md").write_text(
+        "# Enunciado\n\nLeé [esto](inexistente.png).\n"
+    )
+
+    check = verify.check_statement_references(problem)
+
+    assert check.status == "fail"
+    assert "inexistente.png" in check.detail
+
+
+def test_a_pdf_statement_passes_without_linting(tmp_path: Path) -> None:
+    problem = _media_dir(tmp_path)
+    (problem / "media" / "statement.pdf").write_bytes(b"%PDF-1.4\n")
+
+    check = verify.check_statement_references(problem)
+
+    assert check.status == "pass", check.problems
+
+
+def test_a_problem_without_a_statement_skips_the_check(tmp_path: Path) -> None:
+    problem = _media_dir(tmp_path)
+
+    check = verify.check_statement_references(problem)
+
+    assert check.status == "skip"
+
+
+def test_both_statements_fail_the_check(tmp_path: Path) -> None:
+    problem = _media_dir(tmp_path)
+    (problem / "media" / "statement.md").write_text("# Enunciado\n")
+    (problem / "media" / "statement.pdf").write_bytes(b"%PDF-1.4\n")
+
+    check = verify.check_statement_references(problem)
+
+    assert check.status == "fail"

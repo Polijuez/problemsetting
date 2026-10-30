@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -597,6 +598,7 @@ CHECK_NAMES: dict[int, str] = {
     4: "brute force agrees with the model solution on the declared cases",
     5: "the checker rejects a deliberately malformed output",
     6: "measurements are reported for calibration",
+    7: "the statement's media references resolve",
 }
 
 
@@ -955,19 +957,68 @@ def check_measurements(reports: Sequence[Report], resolved: meta_mod.ResolvedMet
     )
 
 
+def check_statement_references(problem_dir: Path) -> Check:
+    """Check 7: every relative link in the statement resolves to a media file.
+
+    The site rewrites relative references to the problem's media URL when the
+    package is published; a name that does not exist under ``media/`` ships a
+    dead link.  Absolute URLs, anchors and site paths are the author's business
+    and are left alone.
+    """
+    from .publish import MEDIA_DIRNAME, STATEMENT_FILENAMES, STATEMENT_MD_FILENAME
+
+    media_root = problem_dir / MEDIA_DIRNAME
+    statements = [media_root / name for name in STATEMENT_FILENAMES if (media_root / name).is_file()]
+    if not statements:
+        return _skipped(7, "no statement.md or statement.pdf under media/ to lint")
+    if len(statements) > 1:
+        return _check(7, FAIL, "media/ has both statement.md and statement.pdf: publish "
+                               "carries exactly one")
+
+    if statements[0].name == STATEMENT_MD_FILENAME:
+        text = statements[0].read_text(encoding="utf-8")
+    else:
+        return _check(7, PASS, "statement is a pdf; there are no links to lint")
+
+    available = {
+        path.relative_to(media_root).as_posix()
+        for path in media_root.rglob("*")
+        if path.is_file()
+    }
+    link_re = re.compile(r"(!?)\[([^\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+    missing = []
+    for match in link_re.finditer(text):
+        url = match.group(3)
+        if not url or url.startswith(("#", "/", "mailto:", "http://", "https://")):
+            continue
+        relative = url[len("media/"):] if url.startswith("media/") else url
+        if relative not in available:
+            missing.append(url)
+    if missing:
+        return _check(
+            7,
+            FAIL,
+            "the statement references " + ", ".join(sorted(set(missing))) +
+            ", which media/ does not carry",
+        )
+    return _check(7, PASS, f"every relative link in statement.md resolves under media/ "
+                           f"({len(available)} file(s))")
+
+
 def run_checks(
     reports: Sequence[Report],
     resolved: meta_mod.ResolvedMeta,
     checker: str | None,
+    problem_dir: Path | None = None,
 ) -> list[Check]:
-    """All six checks, in order, over the runs that were graded.
+    """All seven checks, in order, over the runs that were graded.
 
     ``checker`` is ``init.yml``'s ``checker:`` (see :func:`init_checker`), not
     ``resolved.uses_checker``: check 5 has to ask the judge's own source of
     truth, or a ``meta.yml`` whose checker axis is newer than the built
     ``init.yml`` would be read as a checker that is not in force.
     """
-    return [
+    checks = [
         check_model_solution(reports),
         check_declared_verdicts(reports),
         check_time_limit(reports),
@@ -975,6 +1026,9 @@ def run_checks(
         check_checker_rejects(reports, resolved, checker),
         check_measurements(reports, resolved),
     ]
+    if problem_dir is not None:
+        checks.append(check_statement_references(problem_dir))
+    return checks
 
 
 def _print_batches(report: Report) -> None:
@@ -1112,7 +1166,7 @@ def run_verify(problem: str) -> int:
         f"verify: {len(entries)} submission(s), {declared} with expectations, "
         f"{len(mismatched)} mismatch(es)"
     )
-    checks = run_checks(reports, resolved, init_checker(problem_dir))
+    checks = run_checks(reports, resolved, init_checker(problem_dir), problem_dir)
     _print_checks(checks)
     _print_failures(checks, mismatched, width)
     if mismatched or any(check.failed for check in checks):
